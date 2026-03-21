@@ -13,9 +13,8 @@ Route:: get('/hello', function(){
     return ["message" => "Hello World"];
 });
 
-Route::resource('user', UserController::class)
-    ->only(['store', 'index']);
-
+Route::post('/user', [UserController::class, 'store']);
+Route::get('/user', [UserController::class, 'display']);
 
 Route::get('posts', [PostController:: class, 'index'])-> name('posts.index');
 
