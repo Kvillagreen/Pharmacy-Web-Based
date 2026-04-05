@@ -3,76 +3,244 @@
 namespace App\Http\Controllers\v1;
 
 use App\Http\Controllers\Controller;
+use App\Models\v1\Branch;
 use Illuminate\Http\Request;
 use App\Models\v1\Medicine;
-use App\Http\Resources\v1\MedicineCollection;
 use App\Services\v1\MedicineQuery;
-use App\Http\Requests\v1\MedicineRequest;
+use App\Http\Requests\v1\MethodMedicineRequest;
+use Illuminate\Support\Facades\DB;
+use App\Models\v1\Batch;
+use App\Models\v1\Inventory;
+use App\Models\v1\Supplier;
+use Illuminate\Support\Facades\Cache;
+use Carbon\Carbon;
 class MedicineController extends Controller
 {
     /**
      * Display a listing of the resource.
      */
-    private function response($success, $message, $data = null, $extra = [])
-        {
-            return response()->json(array_merge([
-                'success' => $success,
-                'message' => $message,
-                'data' => $data
-            ], $extra));
-        }
+    public function index(Request $request)
+{
+    $site = strtolower($request->header('X-Page-Context', ''));
+    $companyId = (int) $request->input('company_id', 0);
+    $branchId  = (int) $request->input('branch_id', 0);
+    $perPage   = (int) $request->input('per_page', 10);
+    $today     = Carbon::today();
 
-   public function index(Request $request)
-    {
+    $query = Medicine::query()
+        ->join('inventories', 'medicines.medicine_id', '=', 'inventories.medicine_id')
+        ->leftJoin('batches', 'inventories.batch_id', '=', 'batches.batch_id')
+        ->leftJoin('branches', 'inventories.branch_id', '=', 'branches.branch_id')
+        ->leftJoin('suppliers', 'batches.supplier_id', '=', 'suppliers.supplier_id')
+        ->select([
+            'inventories.inventory_id',
+            'inventories.branch_id',
+            'branches.company_id',
+            'inventories.medicine_id',
+            'medicines.medicine_name',
+            'medicines.generic_name',
+            'medicines.category',
+            'medicines.price',
+            'medicines.reorder_level',
+            'medicines.stocks',
+            'medicines.dosage',
+            'medicines.unit',
+            'medicines.type',
+            'medicines.is_dangerous',
+            'medicines.needs_protection',
+            'batches.batch_id',
+            'batches.expiry_date',
+            'batches.received_date',
+            'batches.status as batch_status',
+            'batches.mfg_date',
+            'batches.location',
+            'suppliers.supplier_id',
+            'suppliers.supplier_name',
+            'suppliers.supplier_first_name',
+            'suppliers.supplier_last_name',
+            'suppliers.contact_number',
+            'suppliers.address',
+            'inventories.created_at',
+            'inventories.updated_at',
+        ]);
+
+    // 🔥 Scope control
+    if ($branchId > 0) {
+        $query->where('inventories.branch_id', $branchId);
+    } else {
+        $query->where('branches.company_id', $companyId);
+    }
+    $query->where('branches.status', 'active');
+    if ($request->hasAny(['search', 'sort', 'filter']) || $branchId > 0 || $companyId > 0) {
         $filter = new MedicineQuery();
-        $query = Medicine::query();
-
-        // Apply everything: filter + search + sort
         $query = $filter->apply($request, $query);
-
-        // Paginate dynamically
-        $perPage = $request->query('per_page', 10);
-        $paginated = $query->paginate($perPage);
-        return (new MedicineCollection($paginated))
-                ->additional([
-                    'total_items' => Medicine::count()
-                    'total_amount' => Medicine::count()
-                ]);
     }
 
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create(MedicineRequest $request)
-    {
-        $validated = $request->validated();
-        try {
-            Medicine::create([
-                'medicine_name' => $validated['medicineName'],
-                'generic_name' => $validated['genericName'],
-                'price' => $validated['price'],
-                'category' => $validated['category'],
-                'reorder_level' => $validated['reorderLevel'],
-                'is_dangerous' => $validated['isDangerous'],
-                'needs_protections' => $validated['needsProtection'],
-            ]);
+    $paginated = $query->paginate($perPage);
 
-            return $this->response(true, 'Medicine created successfully');
-
-        } catch (\Exception $e) {
-            return $this->response(false, 'Failed to create account',$e);
+    $applyScopeToMedicine = function ($q) use ($branchId, $companyId) {
+        if ($branchId > 0) {
+            $q->whereHas('inventories', fn ($iq) => $iq->where('branch_id', $branchId));
+        } elseif ($companyId > 0) {
+            $q->whereHas('inventories.branch', fn ($bq) => $bq->where('company_id', $companyId));
         }
+        return $q;
+    };
+
+    $applyScopeToBatch = function ($q) use ($branchId, $companyId) {
+        if ($branchId > 0) {
+            $q->whereHas('inventories', fn ($iq) => $iq->where('branch_id', $branchId));
+        } elseif ($companyId > 0) {
+            $q->whereHas('inventories.branch', fn ($bq) => $bq->where('company_id', $companyId));
+        }
+        return $q;
+    };
+
+    $lowStocks = $applyScopeToMedicine(Medicine::whereColumn('stocks', '<', 'reorder_level'))->count();
+
+    $outOfStock = $applyScopeToMedicine(Medicine::where('stocks', 0))->count();
+
+    $totalAmount = $applyScopeToMedicine(
+        Medicine::selectRaw('SUM(price * stocks) as total')
+    )->value('total');
+
+    $totalAmount = number_format($totalAmount ?? 0, 2);
+
+    $totalItems = $applyScopeToMedicine(Medicine::query())->count();
+
+    $criticalCount = $applyScopeToBatch(
+        Batch::whereDate('expiry_date', '>=', $today)
+            ->whereDate('expiry_date', '<=', $today->copy()->addDays(30))
+    )->count();
+
+    $warningCount = $applyScopeToBatch(
+        Batch::whereDate('expiry_date', '>=', $today->copy()->addDays(31))
+            ->whereDate('expiry_date', '<=', $today->copy()->addDays(90))
+    )->count();
+
+    $goodCount = $applyScopeToBatch(
+        Batch::whereDate('expiry_date', '>=', $today->copy()->addDays(91))
+    )->count();
+
+    $expiredCount = $applyScopeToBatch(
+        Batch::whereDate('expiry_date', '<', $today)
+    )->count();
+
+    $response = [
+        'data' => $paginated->items(),
+        'meta' => [
+            'current_page' => $paginated->currentPage(),
+            'last_page' => $paginated->lastPage(),
+            'per_page' => $paginated->perPage(),
+            'total' => $paginated->total(),
+        ],
+        'company_id' => $companyId,
+        'branch_id' => $branchId,
+        'scope' => $branchId > 0 ? 'branch' : ($companyId > 0 ? 'company' : 'all'),
+        'site' => $site,
+    ];
+
+    if ($site === 'fefo') {
+        $response = array_merge($response, [
+            'critical' => $criticalCount,
+            'good' => $goodCount,
+            'expired' => $expiredCount,
+            'low_stock' => $lowStocks,
+            'warning' => $warningCount,
+        ]);
+    } elseif ($site === 'inventory') {
+        $response = array_merge($response, [
+            'total_items' => $totalItems,
+            'low_stock' => $lowStocks,
+            'out_of_stock' => $outOfStock,
+            'total_amount' => $totalAmount,
+        ]);
     }
 
+    return response()->json($response);
+}
     /**
      * Store a newly created resource in storage.
      */
-    public function store(MedicineRequest $request)
-    {
+    public function store(MethodMedicineRequest $request)
+{
+    DB::beginTransaction();
 
+    try {
+        $data = $request->validated();
+        if (!empty($data['request_token']) && Cache::has($data['request_token'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Duplicate request detected!',
+            ], 400);
+        }
 
+        // Store the token for 30 seconds
+        if (!empty($data['request_token'])) {
+            Cache::put($data['request_token'], true, 30);
+        }
+
+        // 🏥 Medicine
+        $medicine = Medicine::create([
+            'medicine_name' => $data['medicine_name'],
+            'generic_name' => $data['generic_name'],
+            'category' => $data['category'],
+            'price' => $data['price'],
+            'reorder_level' => $data['reorder_level'],
+            'stocks' => $data['stocks'],
+            'dosage' => $data['dosage'],
+            'unit' => $data['unit'],
+            'type' => $data['type'],
+            'is_dangerous' =>(bool)$data['is_dangerous'],
+            'needs_protection' => (bool)$data['needs_protection'],
+        ]);
+
+        // 🏢 Supplier (PREVENT DUPLICATE 🔥)
+       $supplier = Supplier::firstOrCreate(
+    ['supplier_name' => $data['supplier_name']],
+    [
+        'supplier_first_name' => $data['supplier_first_name'],
+        'supplier_last_name' => $data['supplier_last_name'],
+        'contact_number' => $data['contact_number'],
+        'address' => $data['address'],
+    ]
+);
+
+        // 📦 Batch
+        $batch = Batch::create([
+    'supplier_id' => $supplier->supplier_id,
+    'expiry_date' => $data['expiry_date'],
+    'received_date' => $data['received_date'],
+    'mfg_date' => $data['mfg_date'],
+    'location' => $data['location'],
+    'status' => 'active',
+]);
+
+        // 🏬 Inventory
+        $inventory = Inventory::create([
+    'branch_id' => $data['branch_id'],
+    'medicine_id' => $medicine->medicine_id, // <-- fix here too
+    'batch_id' => $batch->batch_id,
+]);
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Medicine, Supplier, Batch, Inventory saved',
+            'data' => compact('medicine','supplier','batch','inventory')
+        ]);
+
+    } catch (\Exception $e) {
+        DB::rollBack();
+        return response()->json([
+            'success' => false,
+            'message' => 'Transaction failed',
+            'error' => $e->getMessage(),  // This will tell you the exact DB problem
+            'trace' => $e->getTraceAsString() // optional for debugging
+        ], 500);
     }
-
+}
     /**
      * Display the specified resource.
      */
@@ -85,23 +253,116 @@ class MedicineController extends Controller
      * Show the form for editing the specified resource.
      */
     public function edit(string $id)
-    {
-        //
-    }
+{
 
+}
     /**
      * Update the specified resource in storage.
      */
-    public function update(Request $request, string $id)
-    {
-        //
+    public function update(MethodMedicineRequest $request, $id)
+{
+    DB::beginTransaction();
+
+    try {
+        $data = $request->validated();
+
+        // 🏥 Update Medicine
+        $medicine = Medicine::where('medicine_id', $id)->firstOrFail();
+        $medicine->update([
+            'medicine_name' => $data['medicine_name'],
+            'generic_name' => $data['generic_name'],
+            'category' => $data['category'],
+            'price' => $data['price'],
+            'reorder_level' => $data['reorder_level'],
+            'stocks' => $data['stocks'],
+            'dosage' => $data['dosage'],
+            'unit' => $data['unit'],
+            'type' => $data['type'],
+            'needs_protection' => filter_var($data['needs_protection'], FILTER_VALIDATE_BOOLEAN),
+            'is_dangerous' => filter_var($data['is_dangerous'], FILTER_VALIDATE_BOOLEAN),
+        ]);
+
+        // 🏬 Update Inventory (assumes 1 inventory per medicine)
+        $inventory = Inventory::where('medicine_id', $medicine->medicine_id)->firstOrFail();
+        $inventory->update([
+            'branch_id' => $data['branch_id'],
+        ]);
+
+        // 📦 Update Batch (linked to inventory)
+        $batch = Batch::where('batch_id', $inventory->batch_id)->firstOrFail();
+        $batch->update([
+            'expiry_date' =>(date( $data['expiry_date'])),
+            'received_date' => (date($data['received_date'])),
+            'status' => 'active',
+            'mfg_date' => $data['mfg_date'],
+            'location' => $data['location'],
+        ]);
+
+        // 🏢 Update Supplier (linked to batch)
+        $supplier = Supplier::where('supplier_id', $batch->supplier_id)->firstOrFail();
+        $supplier->update([
+            'supplier_name' => $data['supplier_name'],
+            'supplier_first_name' => $data['supplier_first_name'],
+            'supplier_last_name' => $data['supplier_last_name'],
+            'contact_number' => $data['contact_number'],
+            'address' => $data['address'],
+        ]);
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'expiry'=> $data['expiry_date'],
+            'message' => 'Medicine updated successfully',
+            'data' => compact('medicine','supplier','batch','inventory')
+        ], 200); // ✅ HTTP 200 OK
+
+    } catch (\Exception $e) {
+        DB::rollBack();
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Update failed',
+            'error' => $e->getMessage(),
+        ], 500);
     }
+}
 
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(string $id)
-    {
-        //
+    public function destroy($medicine_id)
+{
+    DB::beginTransaction();
+
+    try {
+        // Find Medicine
+        $medicine = Medicine::where('medicine_id', $medicine_id)->firstOrFail();
+
+        // Delete all linked inventories first
+        Inventory::where('medicine_id', $medicine_id)->delete();
+
+        // Optionally, you could delete batches if needed
+        // Batch::whereIn('batch_id', $medicine->inventories->pluck('batch_id'))->delete();
+
+        // Delete the medicine
+        $medicine->delete();
+
+        DB::commit();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Medicine and linked inventories deleted successfully'
+        ], 200);
+
+    } catch (\Exception $e) {
+        DB::rollBack();
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Delete failed',
+            'error' => $e->getMessage(),
+        ], 500);
     }
+}
 }

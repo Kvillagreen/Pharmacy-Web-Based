@@ -2,10 +2,11 @@
 
 namespace Database\Seeders;
 
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
+use App\Models\v1\Transaction;
+use App\Models\v1\TransactionItem;
+use App\Models\v1\TransactionType;
 use Illuminate\Database\Seeder;
 use App\Models\v1\User;
-use App\Models\v1\Medicine;
 use App\Models\v1\Branch;
 use App\Models\v1\Batch;
 use App\Models\v1\Supplier;
@@ -27,9 +28,6 @@ class UserSeeder extends Seeder
         ->count(5)
         ->create(['status'=> 'inactive']);
 
-        Medicine::factory()
-        ->count(20)
-        ->create([]);
 
         User::factory()
         ->count(5)
@@ -57,9 +55,21 @@ class UserSeeder extends Seeder
         ->create();
 
         Inventory::factory()
+        ->count(20)
+        ->create();
+
+        Transaction::factory()
         ->count(5)
         ->create();
 
+        TransactionType::factory()
+        ->count(5)
+        ->create();
+
+
+        TransactionItem::factory()
+        ->count(5)
+        ->create();
 
     }
 }

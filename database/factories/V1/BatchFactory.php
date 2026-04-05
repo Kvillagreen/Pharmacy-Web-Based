@@ -22,10 +22,11 @@ class BatchFactory extends Factory
     public function definition(): array
     {
        return [
-            'medicine_id' => Medicine::inRandomOrder()->first()->medicine_id ?? Medicine::factory(),
-            'supplier_id' => Supplier::inRandomOrder()->first()->supplier_id ?? Supplier::factory(),
+        'supplier_id'=> Supplier::factory(),
             'expiry_date' => $this->faker->date(),
             'received_date' => $this->faker->date(),
+            'mfg_date' => $this->faker->date(),
+            'location' => $this->faker->address(),
             'status'=> 'active'
         ];
     }

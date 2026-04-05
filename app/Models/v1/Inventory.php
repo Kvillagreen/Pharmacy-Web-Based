@@ -2,13 +2,37 @@
 
 namespace App\Models\v1;
 
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
 class Inventory extends Model
 {
-    /** @use HasFactory<\Database\Factories\V1\InventoryFactory> */
     use HasFactory;
+
+    protected $primaryKey = 'inventory_id'; // if your table uses inventory_id
+    public $incrementing = true;
+    protected $keyType = 'int';
+
     protected $fillable = [
-        "quantity_on_hand"
+        'branch_id',
+        'medicine_id',
+        'batch_id',
+        // add any other fields you may have
     ];
+
+     public function medicine()
+    {
+        return $this->belongsTo(Medicine::class, 'medicine_id', 'medicine_id');
+    }
+
+    public function batch()
+    {
+        return $this->belongsTo(Batch::class, 'batch_id', 'batch_id')
+                    ->with('supplier'); // eager load supplier
+    }
+        public function branch()
+    {
+        return $this->belongsTo(Branch::class, 'branch_id', 'branch_id');
+    }
+
 }

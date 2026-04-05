@@ -24,10 +24,10 @@ class InventoryFactory extends Factory
     public function definition(): array
     {
          return [
-            'medicine_id' => Medicine::inRandomOrder()->first()->medicine_id ?? Medicine::factory(),
-            'branch_id' => Branch::inRandomOrder()->first()->branch_id ?? Branch::factory(),
-            'batch_id' => Batch::inRandomOrder()->first()->batch_id ?? Batch::factory(),
-            'quantity_on_hand' => $this->faker->numberBetween(0,100),
+
+            'medicine_id' =>Medicine::factory(),
+            'branch_id' => Branch::factory(),
+            'batch_id' => Batch::factory(),
         ];
     }
 }

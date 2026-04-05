@@ -31,4 +31,12 @@ class User extends Authenticatable
         'password',
         'remember_token',
     ];
+
+    public function user(){
+        return $this->hasMany(Transaction::class, 'user_id', 'user_id');
+    }
+    public function branch()
+{
+    return $this->belongsTo(Branch::class, 'branch_id', 'branch_id');
+}
 }

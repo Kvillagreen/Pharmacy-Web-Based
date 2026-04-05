@@ -17,4 +17,14 @@ class AuthUser
     {
         return $next($request);
     }
+    protected function redirectTo($request)
+    {
+        // Do not redirect for API requests
+        if ($request->expectsJson()) {
+            return null;
+        }
+
+        // Only redirect web requests
+        return route('login');
+    }
 }

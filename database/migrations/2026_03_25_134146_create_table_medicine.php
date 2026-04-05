@@ -18,6 +18,10 @@ return new class extends Migration
         $table->string('category');
         $table->decimal('price', 10, 2);
         $table->integer('reorder_level');
+        $table->integer('stocks');
+        $table->integer('dosage');
+        $table->string('unit');
+        $table->string('type');
         $table->boolean('is_dangerous')->default(false);
         $table->boolean('needs_protection')->default(false);
         $table->timestamps();

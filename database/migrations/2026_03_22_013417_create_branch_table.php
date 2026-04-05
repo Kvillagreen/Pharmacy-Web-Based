@@ -9,12 +9,20 @@ return new class extends Migration
     {
         Schema::create('branches', function (Blueprint $table) {
             $table->bigIncrements('branch_id'); // primary key
+            $table->unsignedBigInteger('company_id'); // primary key
             $table->string('branch_name');
             $table->string('branch_address')->nullable();
             $table->string('branch_contact')->nullable();
             $table->enum('status', ['active', 'inactive', 'deleted'])
                   ->default('active');
             $table->timestamps();
+
+
+            $table->foreign('company_id')
+                ->references('company_id')
+                ->on('companies')
+                ->onDelete('cascade')
+                ->onUpdate('cascade');
         });
     }
 

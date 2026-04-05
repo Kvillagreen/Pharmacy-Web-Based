@@ -12,7 +12,7 @@ use Illuminate\Support\Str;
 use Carbon\Carbon;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\v1\UserResource;
-
+use App\Models\v1\Company;
 class AuthController extends Controller
 {
     /**
@@ -31,42 +31,57 @@ class AuthController extends Controller
      * Login
      */
     public function login(LoginRequest $request)
-    {
-        $validated = $request->validated();
-        $key = Str::lower($validated['email']) . '|' . $request->ip();
+{
+    $validated = $request->validated();
+    $key = Str::lower($validated['email']) . '|' . $request->ip();
 
-        if (RateLimiter::tooManyAttempts($key, 5)) {
-            return $this->response(false, 'Too many login attempts. Try again later.');
-        }
-
-        $user = User::where('email', $validated['email'])->first();
-
-        if (!$user || !Hash::check($validated['password'], $user->password)) {
-            RateLimiter::hit($key, 60);
-            return $this->response(false, 'Invalid credentials');
-        }
-
-        if ($user->status !== "approved") {
-            return $this->response(false, 'Your account is not yet approved');
-        }
-
-        RateLimiter::clear($key);
-
-        $user->tokens()->delete();
-
-        $token = $user->createToken(
-            'auth_token',
-            ['user'],
-            Carbon::now()->addHours(8)
-        );
-
-        return $this->response(true, 'Login successful', $user, [
-            'token' => $token->plainTextToken,
-            'data'=> $user,
-            'expires_at' => $token->accessToken->expires_at ?? Carbon::now()->addHours(8),
-        ]);
+    if (RateLimiter::tooManyAttempts($key, 5)) {
+        return $this->response(false, 'Too many login attempts. Try again later.');
     }
 
+    $user = User::where('email', $validated['email'])->first();
+
+    if (!$user || !Hash::check($validated['password'], $user->password)) {
+        RateLimiter::hit($key, 60);
+        return $this->response(false, 'Invalid credentials');
+    }
+
+    if ($user->status !== 'approved') {
+        return $this->response(false, 'Your account is not yet approved');
+    }
+
+    RateLimiter::clear($key);
+
+    $user->tokens()->delete();
+
+    $token = $user->createToken(
+        'auth_token',
+        ['user'],
+        Carbon::now()->addHours(8)
+    );
+
+    $companyData = User::join('branches', 'users.branch_id', '=', 'branches.branch_id')
+        ->join('companies', 'branches.company_id', '=', 'companies.company_id')
+        ->where('users.user_id', $user->user_id)
+        ->select([
+            'companies.company_id',
+            'companies.company_name',
+            'companies.company_email',
+            'companies.tin_number',
+        ])
+        ->first();
+
+    $user->company_id = $companyData?->company_id;
+    $user->company_name = $companyData['company_name'];
+    $user->company_email = $companyData['company_email'];
+    $user->tin_number = $companyData['tin_number'];
+
+    return $this->response(true, 'Login successful', $user, [
+        'token' => $token->plainTextToken,
+        'data' => $user,
+        'expires_at' => $token->accessToken->expires_at ?? Carbon::now()->addHours(8),
+    ]);
+}
     /**
      * Logout
      */

@@ -13,6 +13,7 @@ class MedicineQuery {
         "created_at" => ['eq', 'gt', 'lt'],
         "medicine_id" => ['eq'],
         "generic_name" => ['eq'],
+        "category" => ['eq'],
     ];
 
     // ✅ Optional column mapping (if DB column differs)
@@ -32,8 +33,11 @@ class MedicineQuery {
         "medicine_name",
         "price",
         "created_at",
-        "medicine_id    ",
-        "generic_name"
+        "medicine_id",
+        "generic_name",
+        "batch_id",
+        "expiry_date",
+        "stocks"
     ];
 
     // ---------------------------------
@@ -61,7 +65,6 @@ class MedicineQuery {
                 }
             }
         }
-
         return $eleQuery;
     }
 
@@ -101,13 +104,14 @@ class MedicineQuery {
 
         // Apply search
         $search = $request->query('search');
-        if ($search) {
-            $query->where(function($q) use ($search) {
-                $q->where('medicine_name', 'like', "%$search%")
-                  ->orWhere('generic_name', 'like', "%$search%")
-                  ->orWhere('medicine_id', 'like', "%$search%");
-            });
-        }
+       if ($search) {
+    $query->where(function($q) use ($search) {
+        $q->where('medicines.category', 'like', "%$search%")
+          ->orWhere('medicines.generic_name', 'like', "%$search%")
+          ->orWhere('medicines.medicine_name', 'like', "%$search%")
+          ->orWhere('medicines.medicine_id', 'like', "%$search%");
+    });
+}
 
         // Apply sort
         $sort = $this->getSort($request);

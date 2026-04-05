@@ -13,9 +13,9 @@ return new class extends Migration
     {
         Schema::create('suppliers', function (Blueprint $table) {
             $table->bigIncrements('supplier_id'); // primary key
-             $table->string('first_name');
-            $table->string('last_name');
-            $table->string('contact_person')->nullable();
+            $table->string('supplier_name')->nullable();
+            $table->string('supplier_first_name')->nullable();
+            $table->string('supplier_last_name')->nullable();
             $table->string('contact_number')->nullable();
             $table->string('address')->nullable();
             $table->timestamps();

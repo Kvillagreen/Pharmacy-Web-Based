@@ -16,7 +16,6 @@ return new class extends Migration
                 $table->unsignedBigInteger('branch_id'); // foreign key
                 $table->unsignedBigInteger('medicine_id'); // foreign key
                 $table->unsignedBigInteger('batch_id'); // foreign key
-                $table->unsignedBigInteger('quantity_on_hand'); // quantity, non-negative
                 $table->timestamps();
 
                 // Foreign keys

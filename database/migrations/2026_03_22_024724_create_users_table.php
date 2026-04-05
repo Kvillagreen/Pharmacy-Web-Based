@@ -19,7 +19,7 @@ return new class extends Migration
         $table->string('password');
         $table->enum('status', ['pending', 'approved', 'deleted', 'rejected'])
             ->default('pending');
-        $table->enum('role', ['admin', 'pharmacist', 'inventory', 'user']);
+        $table->enum('role', ['admin', 'pharmacist', 'inventory', 'user','manager']);
         $table->string('address')->nullable();
         $table->timestamps();
 
