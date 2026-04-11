@@ -31,7 +31,8 @@ class AuthController extends Controller
      */
     public function login(LoginRequest $request)
     {
-        $validated = $request->validated();
+        try{
+            $validated = $request->validated();
         $key = Str::lower($validated['email']) . '|' . $request->ip();
 
         if (RateLimiter::tooManyAttempts($key, 5)) {
@@ -100,6 +101,19 @@ class AuthController extends Controller
             'token' => $token->plainTextToken,
             'expires_at' => $token->accessToken->expires_at ?? Carbon::now()->addHours(8),
         ]);
+        }
+        catch(\Exception $e){
+            \Log::error('Login error', [
+                'error' => $e->getMessage(),
+                'stack' => $e->getTraceAsString(),
+            ]);
+            return $this->response(false, 'An error occurred during login',
+            [
+                'error' => $e->getMessage(),
+                'stack' => $e->getTraceAsString(),
+            ]
+            );
+        }
     }
 
     /**
