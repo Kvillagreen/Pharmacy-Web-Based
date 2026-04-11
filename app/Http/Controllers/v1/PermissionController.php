@@ -70,10 +70,12 @@ class PermissionController extends Controller
             ], 201);
         } catch (\Exception $e) {
             DB::rollBack();
-
-            return $this->response(false, 'Failed to assign permissions', [
+            \Log::error('Permission assignment failed', [
+                'user_id' => $validated['user_id'] ?? null,
                 'error' => $e->getMessage(),
-            ], 500);
+            ]);
+
+            return $this->response(false, 'Failed to assign permissions. Please try again later.', null, 500);
         }
     }
 
@@ -117,10 +119,12 @@ class PermissionController extends Controller
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
-
-            return $this->response(false, 'Failed to update user permissions', [
+            \Log::error('Permission update failed', [
+                'user_id' => $userId,
                 'error' => $e->getMessage(),
-            ], 500);
+            ]);
+
+            return $this->response(false, 'Failed to update user permissions. Please try again later.', null, 500);
         }
     }
 
@@ -157,10 +161,12 @@ class PermissionController extends Controller
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
-
-            return $this->response(false, 'Failed to remove permission from user', [
+            \Log::error('Permission removal failed', [
+                'user_id' => $userId,
                 'error' => $e->getMessage(),
-            ], 500);
+            ]);
+
+            return $this->response(false, 'Failed to remove permission from user. Please try again later.', null, 500);
         }
     }
 }

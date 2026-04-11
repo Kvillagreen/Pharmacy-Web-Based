@@ -7,14 +7,43 @@ use App\Http\Requests\v1\RegisterRequest;
 use App\Http\Requests\v1\LoginRequest;
 use App\Models\v1\Permission;
 use App\Models\v1\User;
+use App\Models\v1\Branch;
+use App\Models\v1\SystemAuditLog;
+use App\Models\v1\Transaction;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
+    private function availableUserColumns(array $columns): array
+    {
+        return array_values(array_filter($columns, fn ($column) => Schema::hasColumn('users', $column)));
+    }
+
+    private function safeUserUpdate(User $user, array $attributes): void
+    {
+        $allowedColumns = $this->availableUserColumns(array_keys($attributes));
+
+        if (empty($allowedColumns)) {
+            return;
+        }
+
+        $user->update(array_intersect_key($attributes, array_flip($allowedColumns)));
+    }
+
+    private function safeAuditLog(array $attributes): void
+    {
+        if (!Schema::hasTable('system_audit_logs')) {
+            return;
+        }
+
+        SystemAuditLog::create($attributes);
+    }
+
     /**
      * Standard API Response
      */
@@ -71,8 +100,17 @@ class AuthController extends Controller
             Carbon::now()->addHours(8)
         );
 
-        $user->update([
+        $this->safeUserUpdate($user, [
             'login_at' => now(),
+            'last_login_ip' => $request->ip(),
+            'last_seen_ip' => $request->ip(),
+        ]);
+
+        $this->safeAuditLog([
+            'user_id' => $user->user_id,
+            'action' => 'login',
+            'ip_address' => $request->ip(),
+            'details' => 'User login successful.',
         ]);
 
         $companyData = User::join('branches', 'users.branch_id', '=', 'branches.branch_id')
@@ -115,12 +153,8 @@ class AuthController extends Controller
                 'error' => $e->getMessage(),
                 'stack' => $e->getTraceAsString(),
             ]);
-            return $this->response(false, 'An error occurred during login',
-            [
-                'error' => $e->getMessage(),
-                'stack' => $e->getTraceAsString(),
-            ]
-            );
+
+            return $this->response(false, 'Unable to process login at this time. Please try again later.');
         }
     }
 
@@ -145,7 +179,7 @@ class AuthController extends Controller
         $validated = $request->validated();
 
         try {
-            $user = User::create([
+            $createPayload = [
                 'first_name' => $validated['firstName'],
                 'last_name' => $validated['lastName'],
                 'email' => $validated['email'],
@@ -154,7 +188,17 @@ class AuthController extends Controller
                 'role' => $validated['role'],
                 'address' => $validated['address'],
                 'status' => 'pending',
-            ]);
+            ];
+
+            if (Schema::hasColumn('users', 'registered_ip')) {
+                $createPayload['registered_ip'] = $request->ip();
+            }
+
+            if (Schema::hasColumn('users', 'last_seen_ip')) {
+                $createPayload['last_seen_ip'] = $request->ip();
+            }
+
+            $user = User::create($createPayload);
 
             $user->permissions()->sync(1);
             $user->load('permissions');
@@ -163,9 +207,12 @@ class AuthController extends Controller
                 'user_id' => $user->user_id,
             ]);
         } catch (\Exception $e) {
-            return $this->response(false, 'Failed to create account', [
+            \Log::error('Register error', [
                 'error' => $e->getMessage(),
+                'payload' => $request->except('password'),
             ]);
+
+            return $this->response(false, 'Failed to create account. Please verify your input and try again.');
         }
     }
 
@@ -203,6 +250,10 @@ class AuthController extends Controller
             ->values()
             ->toArray();
 
+        $this->safeUserUpdate($user, [
+            'last_seen_ip' => $request->ip(),
+        ]);
+
         return $this->response(true, 'Authenticated', [
             'user_id' => $user->user_id,
             'first_name' => $user->first_name,
@@ -223,5 +274,114 @@ class AuthController extends Controller
         ], [
             'authenticated' => true,
         ]);
+    }
+
+    public function headerNotifications(Request $request)
+    {
+        $authUser = User::with('permissions')->find(auth()->id());
+
+        if (!$authUser) {
+            return $this->response(false, 'User not logged in', null, [
+                'authenticated' => false,
+            ]);
+        }
+
+        $selectedBranchId = (int) $request->input('branch_id', $authUser->branch_id);
+        $companyId = (int) $request->input('company_id', 0);
+
+        $branchQuery = Branch::query()->where('status', 'active');
+
+        if ($selectedBranchId > 0) {
+            $branchQuery->where('branch_id', $selectedBranchId);
+        } elseif ($companyId > 0) {
+            $branchQuery->where('company_id', $companyId);
+        } else {
+            $branchQuery->where('branch_id', $authUser->branch_id);
+        }
+
+        $scopeBranchIds = $branchQuery->pluck('branch_id');
+
+        $transactionNotifications = Transaction::query()
+            ->with(['branch:branch_id,branch_name', 'user:user_id,first_name,last_name'])
+            ->whereIn('branch_id', $scopeBranchIds)
+            ->latest('created_at')
+            ->limit(8)
+            ->get()
+            ->map(function ($transaction) {
+                $cashierName = trim(($transaction->user?->first_name ?? '') . ' ' . ($transaction->user?->last_name ?? ''));
+
+                return [
+                    'type' => 'transaction',
+                    'title' => 'New transaction recorded',
+                    'message' => $cashierName
+                        ? $cashierName . ' processed a transaction at ' . ($transaction->branch?->branch_name ?? 'the selected branch') . '.'
+                        : 'A new transaction was recorded at ' . ($transaction->branch?->branch_name ?? 'the selected branch') . '.',
+                    'amount' => (float) $transaction->total_amount,
+                    'branch_name' => $transaction->branch?->branch_name,
+                    'created_at' => $transaction->created_at,
+                ];
+            });
+
+        $userNotifications = collect();
+
+        if ($authUser->hasPermission('users')) {
+            $userNotifications = User::query()
+                ->with(['branch:branch_id,branch_name'])
+                ->whereIn('branch_id', $scopeBranchIds)
+                ->where('user_id', '!=', $authUser->user_id)
+                ->latest('created_at')
+                ->limit(8)
+                ->get()
+                ->map(function ($user) {
+                    $fullName = trim($user->first_name . ' ' . $user->last_name);
+
+                    return [
+                        'type' => 'user',
+                        'title' => 'New user registration',
+                        'message' => $fullName . ' registered under ' . ($user->branch?->branch_name ?? 'the selected branch') . '.',
+                        'status' => $user->status,
+                        'branch_name' => $user->branch?->branch_name,
+                        'created_at' => $user->created_at,
+                    ];
+                });
+        }
+
+        $notifications = $transactionNotifications
+            ->concat($userNotifications)
+            ->sortByDesc('created_at')
+            ->take(12)
+            ->values();
+
+        return $this->response(true, 'Header notifications fetched successfully', [
+            'notifications' => $notifications,
+            'unread_count' => $notifications->count(),
+        ]);
+    }
+
+    public function changePassword(Request $request)
+    {
+        $validated = $request->validate([
+            'current_password' => ['required', 'string'],
+            'new_password' => ['required', 'string', 'min:8', 'different:current_password'],
+            'new_password_confirmation' => ['required', 'same:new_password'],
+        ]);
+
+        $user = User::find(auth()->id());
+
+        if (!$user) {
+            return $this->response(false, 'User not found', null, [
+                'authenticated' => false,
+            ]);
+        }
+
+        if (!Hash::check($validated['current_password'], $user->password)) {
+            return $this->response(false, 'Current password is incorrect');
+        }
+
+        $user->update([
+            'password' => Hash::make($validated['new_password']),
+        ]);
+
+        return $this->response(true, 'Password changed successfully');
     }
 }

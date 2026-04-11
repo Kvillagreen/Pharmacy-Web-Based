@@ -26,6 +26,9 @@ class User extends Authenticatable
         'status',
         'role',
         'login_at',
+        'registered_ip',
+        'last_login_ip',
+        'last_seen_ip',
     ];
     protected $casts = [
         'login_at' => 'datetime',

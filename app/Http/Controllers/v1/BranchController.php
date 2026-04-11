@@ -5,6 +5,7 @@ namespace App\Http\Controllers\v1;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\v1\Branch;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use App\Http\Resources\v1\BranchResources;
 use App\Models\v1\Company;
@@ -47,6 +48,7 @@ class BranchController extends Controller
                 'branch_contact' => trim($validated['branch_contact']),
                 'status'         => $validated['status'] ?? 'active', // fallback
             ]);
+            Cache::forget('public_branch_list');
             DB::commit();
 
             return response()->json([
@@ -59,13 +61,13 @@ class BranchController extends Controller
             DB::rollBack();
 
             Log::error('Branch creation failed', [
-                'payload' => $request->all(),
+                'payload' => $request->except('branch_contact'),
                 'error' => $e->getMessage(),
             ]);
 
             return response()->json([
                 'success' => false,
-                'message' => $e->getMessage(),
+                'message' => 'Failed to create branch. Please try again later.',
             ], 500);
         }
     }
@@ -134,6 +136,7 @@ class BranchController extends Controller
         }
 
         $branch->save();
+        Cache::forget('public_branch_list');
 
         DB::commit();
 
@@ -190,6 +193,7 @@ public function destroy(string $id)
         $branch->update([
             'status' => 'deleted'
         ]);
+        Cache::forget('public_branch_list');
 
         DB::commit();
 
@@ -224,7 +228,7 @@ public function destroy(string $id)
 
     public function branch(){
       try{
-          $branches = Branch::all(); // your existing scope
+          $branches = Cache::remember('public_branch_list', 60, fn () => Branch::all());
         return BranchResources::collection($branches);
       }
       catch(\Throwable $e){
@@ -234,7 +238,7 @@ public function destroy(string $id)
 
         return response()->json([
             'success' => false,
-            'message' => 'Failed to retrieve branches.' . $e->getMessage(),
+            'message' => 'Failed to retrieve branches. Please try again later.',
         ], 500);
       }
     }

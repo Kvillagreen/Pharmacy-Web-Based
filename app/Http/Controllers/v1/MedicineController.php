@@ -19,12 +19,15 @@ class MedicineController extends Controller
     /**
      * Display a listing of the resource.
      */
-    public function index(Request $request)
+public function index(Request $request)
 {
     $site = strtolower($request->header('X-Page-Context', ''));
     $companyId = (int) $request->input('company_id', 0);
     $branchId  = (int) $request->input('branch_id', 0);
     $perPage   = (int) $request->input('per_page', 10);
+    $isExport  = filter_var($request->input('export', false), FILTER_VALIDATE_BOOLEAN);
+    $fromDate  = $request->input('from_date');
+    $toDate    = $request->input('to_date');
     $today     = Carbon::today();
 
     $query = Medicine::query()
@@ -71,9 +74,30 @@ class MedicineController extends Controller
     } else {
         $query->where('branches.company_id', $companyId);
     }
+
+    if (!empty($fromDate)) {
+        $query->whereDate('batches.created_at', '>=', $fromDate);
+    }
+
+    if (!empty($toDate)) {
+        $query->whereDate('batches.created_at', '<=', $toDate);
+    }
+
     if ($request->hasAny(['search', 'sort', 'filter']) || $branchId > 0 || $companyId > 0) {
         $filter = new MedicineQuery();
         $query = $filter->apply($request, $query);
+    }
+
+    if ($isExport) {
+        return response()->json([
+            'data' => $query->get(),
+            'company_id' => $companyId,
+            'branch_id' => $branchId,
+            'scope' => $branchId > 0 ? 'branch' : ($companyId > 0 ? 'company' : 'all'),
+            'date_field' => 'received_date',
+            'from_date' => $fromDate,
+            'to_date' => $toDate,
+        ]);
     }
 
     $paginated = $query->paginate($perPage);
