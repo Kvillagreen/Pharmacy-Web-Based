@@ -35,7 +35,8 @@ class Branch extends Model
     }
 
 
-     public function companies()
+
+    public function company()
     {
         return $this->belongsTo(Company::class, 'company_id', 'company_id');
     }

@@ -36,7 +36,26 @@ class User extends Authenticatable
         return $this->hasMany(Transaction::class, 'user_id', 'user_id');
     }
     public function branch()
-{
-    return $this->belongsTo(Branch::class, 'branch_id', 'branch_id');
-}
+    {
+        return $this->belongsTo(Branch::class, 'branch_id', 'branch_id');
+    }
+
+    public function permissions()
+    {
+        return $this->belongsToMany(
+            Permission::class,
+            'user_permissions',
+            'user_id',
+            'permission_id'
+        )->withTimestamps();
+    }
+
+    // ✅ helper function
+    public function hasPermission(string $permission): bool
+    {
+        return $this->permissions()
+            ->where('permission_name', $permission)
+            ->exists();
+    }
+
 }

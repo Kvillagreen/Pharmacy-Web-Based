@@ -3,10 +3,12 @@ use App\Http\Controllers\v1\BranchController;
 use App\Http\Controllers\v1\MedicineController;
 use App\Http\Controllers\v1\PostController;
 use App\Http\Controllers\v1\TransactionController;
+use App\Http\Controllers\v1\FefoController;
 use App\Models\v1\Transaction;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\v1\UserController;
+use App\Http\Controllers\v1\PermissionController;
 use App\Http\Controllers\v1\AuthController;
 use App\Http\Controllers\v1\CompanyController;
 
@@ -15,14 +17,16 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
     Route::post('/register', [AuthController::class, 'register']);
     Route::post('/branch-public', [BranchController::class,'branch']);
     Route::apiResource('/branch',BranchController::class);
+        Route::apiResource('/permissions', PermissionController::class);
     // Protected routes
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
         Route::post('/auth-user', [AuthController::class,'AuthUser']);
         Route::apiResource('/medicine', MedicineController::class);
+        Route::apiResource('/fefo', FefoController::class);
         Route::apiResource('/transaction', TransactionController::class);
         Route::apiResource('/company', CompanyController::class);
-        Route::get('/user', [UserController::class]);
+        Route::apiResource('/user', UserController::class);
 
     });
 

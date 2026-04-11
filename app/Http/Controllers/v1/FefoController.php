@@ -3,17 +3,13 @@
 namespace App\Http\Controllers\v1;
 
 use App\Http\Controllers\Controller;
-use App\Http\Requests\v1\MethodTransactionRequest;
-use App\Models\v1\Medicine;
-use App\Models\v1\Transaction;
-use App\Models\v1\TransactionItem;
-use DB;
 use Illuminate\Http\Request;
 use App\Services\v1\MedicineQuery;
 use App\Models\v1\Batch;
-use Illuminate\Support\Facades\Cache;
 use Carbon\Carbon;
-class TransactionController extends Controller
+use App\Models\v1\Medicine;
+
+class FefoController extends Controller
 {
     /**
      * Display a listing of the resource.
@@ -161,89 +157,19 @@ class TransactionController extends Controller
     /**
      * Show the form for creating a new resource.
      */
-    public function create(Request $request){}
+    public function create()
+    {
+        //
+    }
 
     /**
-     * Store a newly created resource in storage.public function store(MethodTransactionRequest $request)
-     * **/
-
-public function store(MethodTransactionRequest $request){
-    DB::beginTransaction();
-
-    try {
-        $data = $request->validated();
-
-        if (!empty($data['request_token'])) {
-            $lock = Cache::lock('transaction_' . $data['request_token'], 10);
-
-            if (!$lock->get()) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Duplicate request detected!',
-                ], 400);
-            }
-        }
-
-        // 🧠 Validate items
-        if (empty($data['items'])) {
-            throw new \Exception('Invalid items data');
-        }
-
-        // 🔎 Lock + validate stocks
-        $medicines = [];
-
-        foreach ($data['items'] as $item) {
-
-            $medicine = Medicine::where('medicine_id', $item['medicine_id'])
-                ->lockForUpdate()
-                ->firstOrFail();
-
-            if ($medicine->stocks < $item['quantity']) {
-                throw new \Exception("Insufficient stock for medicine ID {$item['medicine_id']}");
-            }
-            $medicines[$item['medicine_id']] = $medicine;
-        }
-
-        // ✅ Create transaction safely using fillable
-        $transaction = Transaction::create([
-            ...collect($data)->except('items')->toArray(),
-            'transaction_type_id' => null
-        ]);
-
-        // 📦 Insert items + deduct stock
-        foreach ($data['items'] as $item) {
-
-            TransactionItem::create([
-                'transaction_id' => $transaction->transaction_id,
-                'medicine_id' => $item['medicine_id'],
-                'quantity' => $item['quantity'],
-            ]);
-
-            $medicines[$item['medicine_id']]
-                ->decrement('stocks', $item['quantity']);
-        }
-
-        DB::commit();
-
-        return response()->json([
-            'message' => 'Transaction created successfully',
-            'data' => $transaction->load('items')
-        ], 201);
-
-    } catch (\Throwable $e) {
-        DB::rollBack();
-
-        \Log::error('Transaction failed', [
-            'error' => $e->getMessage(),
-            'request_data' => $request->all()
-        ]);
-
-        return response()->json([
-            'message' => 'Failed to create transaction',
-            'error' => $e->getMessage()
-        ], 500);
+     * Store a newly created resource in storage.
+     */
+    public function store(Request $request)
+    {
+        //
     }
-}
+
     /**
      * Display the specified resource.
      */

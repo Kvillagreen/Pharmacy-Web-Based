@@ -22,7 +22,7 @@ class RegisterRequest extends FormRequest
             'email' => ['required', 'email', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8'],
             'branchId' => ['required', 'exists:branches,branch_id'],
-            'role' => ['required', Rule::in(['pharmacist', 'admin', 'inventory', 'user'])],
+            'role' => ['required', Rule::in(['pharmacist', 'admin', 'inventory', 'user','manager'])],
             'address' => ['required', 'string', 'max:255'],
         ];
     }

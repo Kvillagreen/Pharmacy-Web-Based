@@ -2,17 +2,16 @@
 
 namespace App\Http\Controllers\v1;
 
+use App\Http\Controllers\Controller;
 use App\Http\Requests\v1\RegisterRequest;
 use App\Http\Requests\v1\LoginRequest;
 use App\Models\v1\User;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
-use Carbon\Carbon;
-use App\Http\Controllers\Controller;
-use App\Http\Resources\v1\UserResource;
-use App\Models\v1\Company;
+
 class AuthController extends Controller
 {
     /**
@@ -23,7 +22,7 @@ class AuthController extends Controller
         return response()->json(array_merge([
             'success' => $success,
             'message' => $message,
-            'data' => $data
+            'data' => $data,
         ], $extra));
     }
 
@@ -31,63 +30,88 @@ class AuthController extends Controller
      * Login
      */
     public function login(LoginRequest $request)
-{
-    $validated = $request->validated();
-    $key = Str::lower($validated['email']) . '|' . $request->ip();
+    {
+        $validated = $request->validated();
+        $key = Str::lower($validated['email']) . '|' . $request->ip();
 
-    if (RateLimiter::tooManyAttempts($key, 5)) {
-        return $this->response(false, 'Too many login attempts. Try again later.');
+        if (RateLimiter::tooManyAttempts($key, 5)) {
+            return $this->response(false, 'Too many login attempts. Try again later.');
+        }
+
+        $user = User::with('permissions')
+            ->where('email', $validated['email'])
+            ->first();
+
+        if (!$user || !Hash::check($validated['password'], $user->password)) {
+            RateLimiter::hit($key, 60);
+            return $this->response(false, 'Invalid credentials');
+        }
+
+        if ($user->status !== 'approved') {
+            return $this->response(false, 'Your account is not yet approved');
+        }
+
+        RateLimiter::clear($key);
+
+        // Remove old tokens
+        $user->tokens()->delete();
+
+        // Get permission names
+        $permissionNames = $user->permissions
+            ->pluck('permission_name')
+            ->values()
+            ->toArray();
+
+        // Create token using permission names as Sanctum abilities
+        $token = $user->createToken(
+            'auth_token',
+            $permissionNames,
+            Carbon::now()->addHours(8)
+        );
+
+        $companyData = User::join('branches', 'users.branch_id', '=', 'branches.branch_id')
+            ->join('companies', 'branches.company_id', '=', 'companies.company_id')
+            ->where('users.user_id', $user->user_id)
+            ->select([
+                'companies.company_id',
+                'companies.company_name',
+                'companies.company_email',
+                'companies.tin_number',
+            ])
+            ->first();
+
+        $responseUser = [
+            'user_id' => $user->user_id,
+            'first_name' => $user->first_name,
+            'last_name' => $user->last_name,
+            'email' => $user->email,
+            'branch_id' => $user->branch_id,
+            'role' => $user->role,
+            'address' => $user->address,
+            'status' => $user->status,
+            'company_id' => $companyData?->company_id,
+            'company_name' => $companyData?->company_name,
+            'company_email' => $companyData?->company_email,
+            'tin_number' => $companyData?->tin_number,
+            'permissions' => $permissionNames,
+        ];
+
+        return $this->response(true, 'Login successful', $responseUser, [
+            'token' => $token->plainTextToken,
+            'expires_at' => $token->accessToken->expires_at ?? Carbon::now()->addHours(8),
+        ]);
     }
 
-    $user = User::where('email', $validated['email'])->first();
-
-    if (!$user || !Hash::check($validated['password'], $user->password)) {
-        RateLimiter::hit($key, 60);
-        return $this->response(false, 'Invalid credentials');
-    }
-
-    if ($user->status !== 'approved') {
-        return $this->response(false, 'Your account is not yet approved');
-    }
-
-    RateLimiter::clear($key);
-
-    $user->tokens()->delete();
-
-    $token = $user->createToken(
-        'auth_token',
-        ['user'],
-        Carbon::now()->addHours(8)
-    );
-
-    $companyData = User::join('branches', 'users.branch_id', '=', 'branches.branch_id')
-        ->join('companies', 'branches.company_id', '=', 'companies.company_id')
-        ->where('users.user_id', $user->user_id)
-        ->select([
-            'companies.company_id',
-            'companies.company_name',
-            'companies.company_email',
-            'companies.tin_number',
-        ])
-        ->first();
-
-    $user->company_id = $companyData?->company_id;
-    $user->company_name = $companyData['company_name'];
-    $user->company_email = $companyData['company_email'];
-    $user->tin_number = $companyData['tin_number'];
-
-    return $this->response(true, 'Login successful', $user, [
-        'token' => $token->plainTextToken,
-        'data' => $user,
-        'expires_at' => $token->accessToken->expires_at ?? Carbon::now()->addHours(8),
-    ]);
-}
     /**
      * Logout
      */
     public function logout(Request $request)
     {
-        $request->user()->currentAccessToken()->delete();
+        $token = $request->user()?->currentAccessToken();
+
+        if ($token) {
+            $token->delete();
+        }
 
         return $this->response(true, 'Logged out');
     }
@@ -100,7 +124,7 @@ class AuthController extends Controller
         $validated = $request->validated();
 
         try {
-            User::create([
+            $user = User::create([
                 'first_name' => $validated['firstName'],
                 'last_name' => $validated['lastName'],
                 'email' => $validated['email'],
@@ -111,33 +135,66 @@ class AuthController extends Controller
                 'status' => 'pending',
             ]);
 
-            return $this->response(true, 'Account created successfully');
-
+            return $this->response(true, 'Account created successfully', [
+                'user_id' => $user->user_id,
+            ]);
         } catch (\Exception $e) {
-            return $this->response(false, 'Failed to create account',$e);
+            return $this->response(false, 'Failed to create account', [
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 
     /**
      * Check Auth
      */
-   public function AuthUser() {
-    $user = auth()->user();
+    public function AuthUser(Request $request)
+    {
+        $user = User::with('permissions')->find(auth()->id());
 
-    if (!$user) {
-        return $this->response(false, 'User not logged in', '', [
-            'authenticated' => false,
+        if (!$user) {
+            return $this->response(false, 'User not logged in', null, [
+                'authenticated' => false,
+            ]);
+        }
+
+        if ($user->status !== 'approved') {
+            return $this->response(false, 'User not approved', null, [
+                'authenticated' => false,
+            ]);
+        }
+        $companyData = User::join('branches', 'users.branch_id', '=', 'branches.branch_id')
+                    ->join('companies', 'branches.company_id', '=', 'companies.company_id')
+                    ->where('users.user_id', $user->user_id)
+                    ->select([
+                        'companies.company_id',
+                        'companies.company_name',
+                        'companies.company_email',
+                        'companies.tin_number',
+                    ])
+                    ->first();
+
+        $permissionNames = $user->permissions
+            ->pluck('permission_name')
+            ->values()
+            ->toArray();
+
+        return $this->response(true, 'Authenticated', [
+            'user_id' => $user->user_id,
+            'first_name' => $user->first_name,
+            'last_name' => $user->last_name,
+            'email' => $user->email,
+            'branch_id' => $user->branch_id,
+            'role' => $user->role,
+            'address' => $user->address,
+            'status' => $user->status,
+            'company_id' => $companyData?->company_id,
+            'company_name' => $companyData?->company_name,
+            'company_email' => $companyData?->company_email,
+            'tin_number' => $companyData?->tin_number,
+            'permissions' => $permissionNames,
+        ], [
+            'authenticated' => true,
         ]);
     }
-
-    if ($user->status !== 'approved') {
-        return $this->response(false, 'User not approved', '', [
-            'authenticated' => false,
-        ]);
-    }
-
-    return $this->response(true, 'Authenticated', '', [
-        'authenticated' => true,
-    ]);
-}
 }
