@@ -234,7 +234,7 @@ public function destroy(string $id)
 
         return response()->json([
             'success' => false,
-            'message' => 'Failed to retrieve branches.',
+            'message' => 'Failed to retrieve branches.' . $e->getMessage(),
         ], 500);
       }
     }
