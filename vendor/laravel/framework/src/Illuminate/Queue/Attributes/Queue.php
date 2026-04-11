@@ -3,6 +3,7 @@
 namespace Illuminate\Queue\Attributes;
 
 use Attribute;
+use UnitEnum;
 
 #[Attribute(Attribute::TARGET_CLASS)]
 class Queue
@@ -10,9 +11,9 @@ class Queue
     /**
      * Create a new attribute instance.
      *
-     * @param  string  $queue
+     * @param  UnitEnum|string  $queue
      */
-    public function __construct(public string $queue)
+    public function __construct(public UnitEnum|string $queue)
     {
         //
     }

@@ -3,6 +3,7 @@
 namespace Illuminate\Queue\Attributes;
 
 use Attribute;
+use UnitEnum;
 
 #[Attribute(Attribute::TARGET_CLASS)]
 class Connection
@@ -10,9 +11,9 @@ class Connection
     /**
      * Create a new attribute instance.
      *
-     * @param  string  $connection
+     * @param  UnitEnum|string  $connection
      */
-    public function __construct(public string $connection)
+    public function __construct(public UnitEnum|string $connection)
     {
         //
     }
