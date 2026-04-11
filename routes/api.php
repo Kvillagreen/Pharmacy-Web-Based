@@ -17,7 +17,7 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
     Route::post('/register', [AuthController::class, 'register']);
     Route::post('/branch-public', [BranchController::class,'branch']);
     Route::apiResource('/branch',BranchController::class);
-        Route::apiResource('/permissions', PermissionController::class);
+    Route::apiResource('/permissions', PermissionController::class);
     // Protected routes
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);

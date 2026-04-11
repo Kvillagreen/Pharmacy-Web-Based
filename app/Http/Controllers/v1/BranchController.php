@@ -223,7 +223,19 @@ public function destroy(string $id)
 }
 
     public function branch(){
-        $branches = Branch::all(); // your existing scope
+      try{
+          $branches = Branch::all(); // your existing scope
         return BranchResources::collection($branches);
+      }
+      catch(\Throwable $e){
+        Log::error('Branch retrieval failed', [
+            'error' => $e->getMessage(),
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to retrieve branches.',
+        ], 500);
+      }
     }
 }
