@@ -5,6 +5,7 @@ namespace App\Http\Controllers\v1;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\v1\RegisterRequest;
 use App\Http\Requests\v1\LoginRequest;
+use App\Models\v1\Permission;
 use App\Models\v1\User;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -70,6 +71,10 @@ class AuthController extends Controller
             Carbon::now()->addHours(8)
         );
 
+        $user->update([
+            'login_at' => now(),
+        ]);
+
         $companyData = User::join('branches', 'users.branch_id', '=', 'branches.branch_id')
             ->join('companies', 'branches.company_id', '=', 'companies.company_id')
             ->where('users.user_id', $user->user_id)
@@ -95,6 +100,9 @@ class AuthController extends Controller
             'company_email' => $companyData?->company_email,
             'tin_number' => $companyData?->tin_number,
             'permissions' => $permissionNames,
+            'created_at' => $user->created_at,
+            'login_at' => $user->login_at,
+
         ];
 
         return $this->response(true, 'Login successful', $responseUser, [
@@ -126,7 +134,6 @@ class AuthController extends Controller
         if ($token) {
             $token->delete();
         }
-
         return $this->response(true, 'Logged out');
     }
 
@@ -148,6 +155,9 @@ class AuthController extends Controller
                 'address' => $validated['address'],
                 'status' => 'pending',
             ]);
+
+            $user->permissions()->sync(1);
+            $user->load('permissions');
 
             return $this->response(true, 'Account created successfully', [
                 'user_id' => $user->user_id,
@@ -207,6 +217,9 @@ class AuthController extends Controller
             'company_email' => $companyData?->company_email,
             'tin_number' => $companyData?->tin_number,
             'permissions' => $permissionNames,
+            'created_at' => $user->created_at,
+            'login_at' => $user->login_at,
+
         ], [
             'authenticated' => true,
         ]);

@@ -65,12 +65,12 @@ class MedicineController extends Controller
         ]);
 
     // 🔥 Scope control
+    $query->where('branches.status', 'active');
     if ($branchId > 0) {
         $query->where('inventories.branch_id', $branchId);
     } else {
         $query->where('branches.company_id', $companyId);
     }
-    $query->where('branches.status', 'active');
     if ($request->hasAny(['search', 'sort', 'filter']) || $branchId > 0 || $companyId > 0) {
         $filter = new MedicineQuery();
         $query = $filter->apply($request, $query);

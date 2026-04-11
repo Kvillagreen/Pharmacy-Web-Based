@@ -21,6 +21,7 @@ return new class extends Migration
             ->default('pending');
         $table->enum('role', ['admin', 'pharmacist', 'inventory', 'user','manager']);
         $table->string('address')->nullable();
+        $table->timestamp('login_at')->nullable();
         $table->timestamps();
 
         $table->foreign('branch_id')->references('branch_id')->on('branches');

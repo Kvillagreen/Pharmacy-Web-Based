@@ -5,12 +5,12 @@ namespace App\Models\v1;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Laravel\Sanctum\HasApiTokens;
-
+use Illuminate\Database\Eloquent\SoftDeletes;
 class User extends Authenticatable
 {
     /** @use HasFactory<\Database\Factories\V1\UserFactory> */
     use HasApiTokens, HasFactory;
-
+    use SoftDeletes;
     use HasApiTokens;
 
     protected $primaryKey = 'user_id';
@@ -25,8 +25,11 @@ class User extends Authenticatable
         'address',
         'status',
         'role',
+        'login_at',
     ];
-
+    protected $casts = [
+        'login_at' => 'datetime',
+    ];
     protected $hidden = [
         'password',
         'remember_token',
