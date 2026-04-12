@@ -22,30 +22,44 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
 
     // Protected routes
     Route::middleware('auth:sanctum')->group(function () {
-        Route::post('/logout', [AuthController::class, 'logout']);
-        Route::post('/auth-user', [AuthController::class,'AuthUser']);
-        Route::apiResource('/branch', BranchController::class);
-        Route::apiResource('/permissions', PermissionController::class);
         Route::get('/header/notifications', [AuthController::class, 'headerNotifications']);
-        Route::post('/change-password', [AuthController::class, 'changePassword']);
         Route::get('/dashboard', [DashboardController::class, 'index']);
         Route::get('/controlled-drugs', [ControlledDrugController::class, 'index']);
         Route::get('/reports', [ReportController::class, 'index']);
         Route::get('/reports/bir-annual', [ReportController::class, 'birAnnualDeclaration']);
-        Route::apiResource('/medicine', MedicineController::class);
-        Route::apiResource('/fefo', FefoController::class);
-        Route::apiResource('/transaction', TransactionController::class);
-        Route::apiResource('/company', CompanyController::class);
-
-        // User management routes
-        Route::post('/user/update-status/{id}/{status}', [UserController::class, 'updateUserStatus']);
-        Route::post('/user/update-branch/{id}/{branch_id}', [UserController::class, 'updateUserBranch']);
         Route::get('/user/permissions/options', [UserController::class, 'permissionOptions']);
         Route::get('/user/{id}/permissions', [UserController::class, 'userPermissions']);
+        Route::get('/branch', [BranchController::class, 'index']);
+        Route::get('/branch/{branch}', [BranchController::class, 'show']);
+        Route::get('/permissions', [PermissionController::class, 'index']);
+        Route::get('/permissions/{permission}', [PermissionController::class, 'show']);
+        Route::get('/medicine', [MedicineController::class, 'index']);
+        Route::get('/medicine/{medicine}', [MedicineController::class, 'show']);
+        Route::get('/fefo', [FefoController::class, 'index']);
+        Route::get('/fefo/{fefo}', [FefoController::class, 'show']);
+        Route::get('/transaction', [TransactionController::class, 'index']);
+        Route::get('/transaction/{transaction}', [TransactionController::class, 'show']);
+        Route::get('/company', [CompanyController::class, 'index']);
+        Route::get('/company/{company}', [CompanyController::class, 'show']);
+        Route::get('/user', [UserController::class, 'index']);
+        Route::get('/user/{user}', [UserController::class, 'show']);
+
+    });
+
+    Route::middleware(['auth:sanctum', 'prevent.concurrent'])->group(function () {
+        Route::post('/logout', [AuthController::class, 'logout']);
+        Route::post('/auth-user', [AuthController::class,'AuthUser']);
+        Route::apiResource('/branch', BranchController::class)->except(['index', 'show']);
+        Route::apiResource('/permissions', PermissionController::class)->except(['index', 'show']);
+        Route::post('/change-password', [AuthController::class, 'changePassword']);
+        Route::apiResource('/medicine', MedicineController::class)->except(['index', 'show']);
+        Route::apiResource('/fefo', FefoController::class)->except(['index', 'show']);
+        Route::apiResource('/transaction', TransactionController::class)->except(['index', 'show']);
+        Route::apiResource('/company', CompanyController::class)->except(['index', 'show']);
+        Route::post('/user/update-status/{id}/{status}', [UserController::class, 'updateUserStatus']);
+        Route::post('/user/update-branch/{id}/{branch_id}', [UserController::class, 'updateUserBranch']);
         Route::put('/user/{id}/permissions', [UserController::class, 'updateUserPermissions']);
-        Route::apiResource('/user', UserController::class);
-
-
+        Route::apiResource('/user', UserController::class)->except(['index', 'show']);
     });
 
     Route::middleware(['auth:sanctum', 'super_admin'])->prefix('admin')->group(function () {

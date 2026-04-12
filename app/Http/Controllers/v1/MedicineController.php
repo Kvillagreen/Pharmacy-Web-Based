@@ -102,53 +102,44 @@ public function index(Request $request)
 
     $paginated = $query->paginate($perPage);
 
-    $applyScopeToMedicine = function ($q) use ($branchId, $companyId) {
-        if ($branchId > 0) {
-            $q->whereHas('inventories', fn ($iq) => $iq->where('branch_id', $branchId));
-        } elseif ($companyId > 0) {
-            $q->whereHas('inventories.branch', fn ($bq) => $bq->where('company_id', $companyId));
-        }
-        return $q;
-    };
+    $medicineSummary = Medicine::query()
+        ->selectRaw('
+            COUNT(*) as total_items,
+            COALESCE(SUM(price * stocks), 0) as total_amount,
+            SUM(CASE WHEN stocks < reorder_level THEN 1 ELSE 0 END) as low_stock_count,
+            SUM(CASE WHEN stocks = 0 THEN 1 ELSE 0 END) as out_of_stock_count
+        ')
+        ->whereExists(function ($exists) use ($branchId, $companyId) {
+            $exists->select(DB::raw(1))
+                ->from('inventories')
+                ->join('branches', 'branches.branch_id', '=', 'inventories.branch_id')
+                ->whereColumn('inventories.medicine_id', 'medicines.medicine_id')
+                ->where('branches.status', 'active')
+                ->when($branchId > 0, fn ($query) => $query->where('inventories.branch_id', $branchId))
+                ->when($branchId <= 0 && $companyId > 0, fn ($query) => $query->where('branches.company_id', $companyId));
+        })
+        ->first();
 
-    $applyScopeToBatch = function ($q) use ($branchId, $companyId) {
-        if ($branchId > 0) {
-            $q->whereHas('inventories', fn ($iq) => $iq->where('branch_id', $branchId));
-        } elseif ($companyId > 0) {
-            $q->whereHas('inventories.branch', fn ($bq) => $bq->where('company_id', $companyId));
-        }
-        return $q;
-    };
+    $criticalUntil = $today->copy()->addDays(30)->toDateString();
+    $warningStart = $today->copy()->addDays(31)->toDateString();
+    $warningUntil = $today->copy()->addDays(90)->toDateString();
+    $goodStart = $today->copy()->addDays(91)->toDateString();
+    $todayDate = $today->toDateString();
 
-    $lowStocks = $applyScopeToMedicine(Medicine::whereColumn('stocks', '<', 'reorder_level'))->count();
-
-    $outOfStock = $applyScopeToMedicine(Medicine::where('stocks', 0))->count();
-
-    $totalAmount = $applyScopeToMedicine(
-        Medicine::selectRaw('SUM(price * stocks) as total')
-    )->value('total');
-
-    $totalAmount = number_format($totalAmount ?? 0, 2);
-
-    $totalItems = $applyScopeToMedicine(Medicine::query())->count();
-
-    $criticalCount = $applyScopeToBatch(
-        Batch::whereDate('expiry_date', '>=', $today)
-            ->whereDate('expiry_date', '<=', $today->copy()->addDays(30))
-    )->count();
-
-    $warningCount = $applyScopeToBatch(
-        Batch::whereDate('expiry_date', '>=', $today->copy()->addDays(31))
-            ->whereDate('expiry_date', '<=', $today->copy()->addDays(90))
-    )->count();
-
-    $goodCount = $applyScopeToBatch(
-        Batch::whereDate('expiry_date', '>=', $today->copy()->addDays(91))
-    )->count();
-
-    $expiredCount = $applyScopeToBatch(
-        Batch::whereDate('expiry_date', '<', $today)
-    )->count();
+    $batchSummary = Batch::query()
+        ->join('inventories', 'inventories.batch_id', '=', 'batches.batch_id')
+        ->join('branches', 'branches.branch_id', '=', 'inventories.branch_id')
+        ->where('branches.status', 'active')
+        ->when($branchId > 0, fn ($query) => $query->where('inventories.branch_id', $branchId))
+        ->when($branchId <= 0 && $companyId > 0, fn ($query) => $query->where('branches.company_id', $companyId))
+        ->selectRaw(
+            'COUNT(DISTINCT CASE WHEN expiry_date >= ? AND expiry_date <= ? THEN batches.batch_id END) as critical_count,
+             COUNT(DISTINCT CASE WHEN expiry_date >= ? AND expiry_date <= ? THEN batches.batch_id END) as warning_count,
+             COUNT(DISTINCT CASE WHEN expiry_date >= ? THEN batches.batch_id END) as good_count,
+             COUNT(DISTINCT CASE WHEN expiry_date < ? THEN batches.batch_id END) as expired_count',
+            [$todayDate, $criticalUntil, $warningStart, $warningUntil, $goodStart, $todayDate]
+        )
+        ->first();
 
     $response = [
         'data' => $paginated->items(),
@@ -166,18 +157,18 @@ public function index(Request $request)
 
     if ($site === 'fefo') {
         $response = array_merge($response, [
-            'critical' => $criticalCount,
-            'good' => $goodCount,
-            'expired' => $expiredCount,
-            'low_stock' => $lowStocks,
-            'warning' => $warningCount,
+            'critical' => (int) ($batchSummary->critical_count ?? 0),
+            'good' => (int) ($batchSummary->good_count ?? 0),
+            'expired' => (int) ($batchSummary->expired_count ?? 0),
+            'low_stock' => (int) ($medicineSummary->low_stock_count ?? 0),
+            'warning' => (int) ($batchSummary->warning_count ?? 0),
         ]);
     } elseif ($site === 'inventory') {
         $response = array_merge($response, [
-            'total_items' => $totalItems,
-            'low_stock' => $lowStocks,
-            'out_of_stock' => $outOfStock,
-            'total_amount' => $totalAmount,
+            'total_items' => (int) ($medicineSummary->total_items ?? 0),
+            'low_stock' => (int) ($medicineSummary->low_stock_count ?? 0),
+            'out_of_stock' => (int) ($medicineSummary->out_of_stock_count ?? 0),
+            'total_amount' => number_format((float) ($medicineSummary->total_amount ?? 0), 2),
         ]);
     }
 

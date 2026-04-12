@@ -13,6 +13,7 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
+            'prevent.concurrent' => \App\Http\Middleware\PreventConcurrentSubmission::class,
             'super_admin' => \App\Http\Middleware\EnsureSuperAdmin::class,
         ]);
     })

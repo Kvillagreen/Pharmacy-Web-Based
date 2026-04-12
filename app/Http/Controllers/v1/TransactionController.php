@@ -169,6 +169,7 @@ class TransactionController extends Controller
 
 public function store(MethodTransactionRequest $request){
     DB::beginTransaction();
+    $lock = null;
 
     try {
         $data = $request->validated();
@@ -180,7 +181,7 @@ public function store(MethodTransactionRequest $request){
                 return response()->json([
                     'success' => false,
                     'message' => 'Duplicate request detected!',
-                ], 400);
+                ], 429);
             }
         }
 
@@ -190,18 +191,27 @@ public function store(MethodTransactionRequest $request){
         }
 
         // 🔎 Lock + validate stocks
-        $medicines = [];
+        $requestedQuantities = collect($data['items'])
+            ->groupBy('medicine_id')
+            ->map(fn ($items) => (int) $items->sum('quantity'));
 
-        foreach ($data['items'] as $item) {
+        $medicines = Medicine::query()
+            ->whereIn('medicine_id', $requestedQuantities->keys())
+            ->orderBy('medicine_id')
+            ->lockForUpdate()
+            ->get()
+            ->keyBy('medicine_id');
 
-            $medicine = Medicine::where('medicine_id', $item['medicine_id'])
-                ->lockForUpdate()
-                ->firstOrFail();
+        if ($medicines->count() !== $requestedQuantities->count()) {
+            throw new \Exception('One or more medicines could not be found.');
+        }
 
-            if ($medicine->stocks < $item['quantity']) {
-                throw new \Exception("Insufficient stock for medicine ID {$item['medicine_id']}");
+        foreach ($requestedQuantities as $medicineId => $quantity) {
+            $medicine = $medicines->get($medicineId);
+
+            if ((int) $medicine->stocks < (int) $quantity) {
+                throw new \Exception("Insufficient stock for medicine ID {$medicineId}");
             }
-            $medicines[$item['medicine_id']] = $medicine;
         }
 
         // ✅ Create transaction safely using fillable
@@ -211,16 +221,21 @@ public function store(MethodTransactionRequest $request){
         ]);
 
         // 📦 Insert items + deduct stock
+        $transactionItems = [];
         foreach ($data['items'] as $item) {
-
-            TransactionItem::create([
+            $transactionItems[] = [
                 'transaction_id' => $transaction->transaction_id,
                 'medicine_id' => $item['medicine_id'],
                 'quantity' => $item['quantity'],
-            ]);
+                'created_at' => now(),
+                'updated_at' => now(),
+            ];
+        }
 
-            $medicines[$item['medicine_id']]
-                ->decrement('stocks', $item['quantity']);
+        TransactionItem::insert($transactionItems);
+
+        foreach ($requestedQuantities as $medicineId => $quantity) {
+            $medicines->get($medicineId)->decrement('stocks', $quantity);
         }
 
         DB::commit();
@@ -242,6 +257,8 @@ public function store(MethodTransactionRequest $request){
             'message' => 'Failed to create transaction',
             'error' => $e->getMessage()
         ], 500);
+    } finally {
+        optional($lock)->release();
     }
 }
     /**

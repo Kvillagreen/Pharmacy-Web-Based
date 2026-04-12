@@ -79,45 +79,55 @@ class ReportController extends Controller
             ]);
         }
 
-        $currentRevenue = (float) Transaction::query()
+        $transactionSummary = Transaction::query()
             ->whereIn('branch_id', $scopeBranchIds)
-            ->whereBetween('created_at', [$rangeStart, $rangeEnd])
-            ->sum('total_amount');
+            ->whereBetween('created_at', [$previousStart, $rangeEnd])
+            ->selectRaw(
+                'COALESCE(SUM(CASE WHEN created_at BETWEEN ? AND ? THEN total_amount ELSE 0 END), 0) as current_revenue,
+                 COALESCE(SUM(CASE WHEN created_at BETWEEN ? AND ? THEN total_amount ELSE 0 END), 0) as previous_revenue,
+                 SUM(CASE WHEN created_at BETWEEN ? AND ? THEN 1 ELSE 0 END) as transaction_count,
+                 COALESCE(SUM(CASE WHEN created_at BETWEEN ? AND ? THEN discount ELSE 0 END), 0) as total_discount',
+                [
+                    $rangeStart, $rangeEnd,
+                    $previousStart, $previousEnd,
+                    $rangeStart, $rangeEnd,
+                    $rangeStart, $rangeEnd,
+                ]
+            )
+            ->first();
 
-        $previousRevenue = (float) Transaction::query()
-            ->whereIn('branch_id', $scopeBranchIds)
-            ->whereBetween('created_at', [$previousStart, $previousEnd])
-            ->sum('total_amount');
-
-        $transactionCount = (int) Transaction::query()
-            ->whereIn('branch_id', $scopeBranchIds)
-            ->whereBetween('created_at', [$rangeStart, $rangeEnd])
-            ->count();
-
+        $currentRevenue = (float) ($transactionSummary->current_revenue ?? 0);
+        $previousRevenue = (float) ($transactionSummary->previous_revenue ?? 0);
+        $transactionCount = (int) ($transactionSummary->transaction_count ?? 0);
         $averageSale = $transactionCount > 0 ? round($currentRevenue / $transactionCount, 2) : 0;
+        $totalDiscount = (float) ($transactionSummary->total_discount ?? 0);
 
-        $totalDiscount = (float) Transaction::query()
-            ->whereIn('branch_id', $scopeBranchIds)
-            ->whereBetween('created_at', [$rangeStart, $rangeEnd])
-            ->sum('discount');
+        $inventorySummary = Medicine::query()
+            ->selectRaw(
+                'COALESCE(SUM(price * stocks), 0) as inventory_value,
+                 SUM(CASE WHEN stocks <= reorder_level THEN 1 ELSE 0 END) as low_stock_count'
+            )
+            ->whereExists(function ($query) use ($scopeBranchIds) {
+                $query->select(DB::raw(1))
+                    ->from('inventories')
+                    ->whereColumn('inventories.medicine_id', 'medicines.medicine_id')
+                    ->whereIn('inventories.branch_id', $scopeBranchIds);
+            })
+            ->first();
 
-        $scopedMedicines = Medicine::query()
-            ->join('inventories', 'medicines.medicine_id', '=', 'inventories.medicine_id')
+        $inventoryValue = (float) ($inventorySummary->inventory_value ?? 0);
+        $lowStockCount = (int) ($inventorySummary->low_stock_count ?? 0);
+
+        $batchSummary = Batch::query()
+            ->join('inventories', 'inventories.batch_id', '=', 'batches.batch_id')
             ->whereIn('inventories.branch_id', $scopeBranchIds)
-            ->select('medicines.medicine_id', 'medicines.price', 'medicines.stocks', 'medicines.reorder_level')
-            ->distinct()
-            ->get();
+            ->selectRaw(
+                'COUNT(DISTINCT CASE WHEN expiry_date >= ? AND expiry_date <= ? THEN batches.batch_id END) as expiring_30_count',
+                [$today->toDateString(), $today->copy()->addDays(30)->toDateString()]
+            )
+            ->first();
 
-        $inventoryValue = (float) $scopedMedicines->sum(fn ($medicine) => (float) $medicine->price * (int) $medicine->stocks);
-        $lowStockCount = (int) $scopedMedicines
-            ->filter(fn ($medicine) => (int) $medicine->stocks <= (int) $medicine->reorder_level)
-            ->count();
-
-        $expiring30Count = (int) Batch::query()
-            ->whereHas('inventories', fn ($query) => $query->whereIn('branch_id', $scopeBranchIds))
-            ->whereDate('expiry_date', '>=', $today)
-            ->whereDate('expiry_date', '<=', $today->copy()->addDays(30))
-            ->count();
+        $expiring30Count = (int) ($batchSummary->expiring_30_count ?? 0);
 
         $dailyRevenueRaw = Transaction::query()
             ->selectRaw('DATE(created_at) as sale_date, SUM(total_amount) as total_revenue, COUNT(*) as transaction_count')
