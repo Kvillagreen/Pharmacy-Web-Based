@@ -76,26 +76,53 @@ class BranchController extends Controller
      * Display the specified resource.
      */
    public function show(string $id)
-{
-    // Company with ONLY active branches
-    $company = Company::with([
-        'branches' => function ($q) {
-            $q->where('status', 'active');
-        }
-    ])->findOrFail($id);
+    {
+        try {
+            $company = Company::query()->find($id);
 
-    // Also filter here
-    $branches = Branch::where('company_id', $id)
-        ->where('status', 'active')
-        ->get();
-    return response()->json([
-        "success" => true,
-        "data" => [
-            "company" => $branches,
-            "branches" => BranchResources::collection($company->branches),
-        ]
-    ]);
-}
+            if (!$company) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Company not found.',
+                    'data' => [
+                        'company' => null,
+                        'branches' => [],
+                    ],
+                ], 404);
+            }
+
+            $branches = Branch::query()
+                ->where('company_id', $id)
+                ->where('status', 'active')
+                ->orderBy('branch_name')
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'company' => [
+                        'company_id' => (int) $company->company_id,
+                        'company_name' => $company->company_name,
+                    ],
+                    'branches' => BranchResources::collection($branches),
+                ]
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Branch retrieval by company failed', [
+                'company_id' => $id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to retrieve branches.',
+                'data' => [
+                    'company' => null,
+                    'branches' => [],
+                ],
+            ], 500);
+        }
+    }
 
     /**
      * Show the form for editing the specified resource.
@@ -228,7 +255,7 @@ public function destroy(string $id)
 
     public function branch(){
       try{
-          $branches = Cache::remember('public_branch_list', 60, fn () => Branch::all());
+          $branches = Cache::remember('public_branch_list', 0, fn () => Branch::all());
         return BranchResources::collection($branches);
       }
       catch(\Throwable $e){
