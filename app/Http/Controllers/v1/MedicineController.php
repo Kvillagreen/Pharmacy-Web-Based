@@ -71,7 +71,7 @@ public function index(Request $request)
     $query->where('branches.status', 'active');
     if ($branchId > 0) {
         $query->where('inventories.branch_id', $branchId);
-    } else {
+    } elseif ($companyId > 0) {
         $query->where('branches.company_id', $companyId);
     }
 

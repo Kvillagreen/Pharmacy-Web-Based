@@ -119,3 +119,5 @@ return response()->json([
     });
 
 });
+
+require __DIR__.'/mobile.php';
