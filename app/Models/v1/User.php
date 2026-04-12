@@ -29,9 +29,23 @@ class User extends Authenticatable
         'registered_ip',
         'last_login_ip',
         'last_seen_ip',
+        'notify_transactions',
+        'notify_user_registrations',
+        'notify_low_stock',
+        'notify_expiry_alerts',
+        'notify_security_alerts',
+        'notify_browser',
+        'last_password_changed_at',
     ];
     protected $casts = [
         'login_at' => 'datetime',
+        'last_password_changed_at' => 'datetime',
+        'notify_transactions' => 'boolean',
+        'notify_user_registrations' => 'boolean',
+        'notify_low_stock' => 'boolean',
+        'notify_expiry_alerts' => 'boolean',
+        'notify_security_alerts' => 'boolean',
+        'notify_browser' => 'boolean',
     ];
     protected $hidden = [
         'password',

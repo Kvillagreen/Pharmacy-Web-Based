@@ -51,6 +51,9 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
     Route::middleware(['auth:sanctum', 'prevent.concurrent'])->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
         Route::post('/auth-user', [AuthController::class,'AuthUser']);
+        Route::get('/settings', [AuthController::class, 'settings']);
+        Route::put('/settings/notifications', [AuthController::class, 'updateNotificationPreferences']);
+        Route::post('/settings/revoke-other-sessions', [AuthController::class, 'revokeOtherSessions']);
         Route::apiResource('/branch', BranchController::class)->except(['index', 'show']);
         Route::apiResource('/permissions', PermissionController::class)->except(['index', 'show']);
         Route::post('/change-password', [AuthController::class, 'changePassword']);

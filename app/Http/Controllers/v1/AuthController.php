@@ -8,6 +8,8 @@ use App\Http\Requests\v1\LoginRequest;
 use App\Models\v1\Permission;
 use App\Models\v1\User;
 use App\Models\v1\Branch;
+use App\Models\v1\Batch;
+use App\Models\v1\Inventory;
 use App\Models\v1\SystemAuditLog;
 use App\Models\v1\Transaction;
 use Carbon\Carbon;
@@ -54,6 +56,33 @@ class AuthController extends Controller
             'message' => $message,
             'data' => $data,
         ], $extra));
+    }
+
+    private function notificationPreferences(User $user): array
+    {
+        return [
+            'notify_transactions' => (bool) ($user->notify_transactions ?? true),
+            'notify_user_registrations' => (bool) ($user->notify_user_registrations ?? true),
+            'notify_low_stock' => (bool) ($user->notify_low_stock ?? true),
+            'notify_expiry_alerts' => (bool) ($user->notify_expiry_alerts ?? true),
+            'notify_security_alerts' => (bool) ($user->notify_security_alerts ?? true),
+            'notify_browser' => (bool) ($user->notify_browser ?? true),
+        ];
+    }
+
+    private function companyDataForUser(User $user): ?object
+    {
+        return User::join('branches', 'users.branch_id', '=', 'branches.branch_id')
+            ->join('companies', 'branches.company_id', '=', 'companies.company_id')
+            ->where('users.user_id', $user->user_id)
+            ->select([
+                'companies.company_id',
+                'companies.company_name',
+                'companies.company_email',
+                'companies.tin_number',
+                'branches.branch_name',
+            ])
+            ->first();
     }
 
     /**
@@ -113,16 +142,7 @@ class AuthController extends Controller
             'details' => 'User login successful.',
         ]);
 
-        $companyData = User::join('branches', 'users.branch_id', '=', 'branches.branch_id')
-            ->join('companies', 'branches.company_id', '=', 'companies.company_id')
-            ->where('users.user_id', $user->user_id)
-            ->select([
-                'companies.company_id',
-                'companies.company_name',
-                'companies.company_email',
-                'companies.tin_number',
-            ])
-            ->first();
+        $companyData = $this->companyDataForUser($user);
 
         $responseUser = [
             'user_id' => $user->user_id,
@@ -241,16 +261,7 @@ class AuthController extends Controller
                 'authenticated' => false,
             ]);
         }
-        $companyData = User::join('branches', 'users.branch_id', '=', 'branches.branch_id')
-                    ->join('companies', 'branches.company_id', '=', 'companies.company_id')
-                    ->where('users.user_id', $user->user_id)
-                    ->select([
-                        'companies.company_id',
-                        'companies.company_name',
-                        'companies.company_email',
-                        'companies.tin_number',
-                    ])
-                    ->first();
+        $companyData = $this->companyDataForUser($user);
 
         $permissionNames = $user->permissions
             ->pluck('permission_name')
@@ -307,31 +318,35 @@ class AuthController extends Controller
         }
 
         $scopeBranchIds = $branchQuery->pluck('branch_id');
+        $notificationPreferences = $this->notificationPreferences($authUser);
 
-        $transactionNotifications = Transaction::query()
-            ->with(['branch:branch_id,branch_name', 'user:user_id,first_name,last_name'])
-            ->whereIn('branch_id', $scopeBranchIds)
-            ->latest('created_at')
-            ->limit(8)
-            ->get()
-            ->map(function ($transaction) {
-                $cashierName = trim(($transaction->user?->first_name ?? '') . ' ' . ($transaction->user?->last_name ?? ''));
+        $transactionNotifications = collect();
+        if ($notificationPreferences['notify_transactions']) {
+            $transactionNotifications = Transaction::query()
+                ->with(['branch:branch_id,branch_name', 'user:user_id,first_name,last_name'])
+                ->whereIn('branch_id', $scopeBranchIds)
+                ->latest('created_at')
+                ->limit(8)
+                ->get()
+                ->map(function ($transaction) {
+                    $cashierName = trim(($transaction->user?->first_name ?? '') . ' ' . ($transaction->user?->last_name ?? ''));
 
-                return [
-                    'type' => 'transaction',
-                    'title' => 'New transaction recorded',
-                    'message' => $cashierName
-                        ? $cashierName . ' processed a transaction at ' . ($transaction->branch?->branch_name ?? 'the selected branch') . '.'
-                        : 'A new transaction was recorded at ' . ($transaction->branch?->branch_name ?? 'the selected branch') . '.',
-                    'amount' => (float) $transaction->total_amount,
-                    'branch_name' => $transaction->branch?->branch_name,
-                    'created_at' => $transaction->created_at,
-                ];
-            });
+                    return [
+                        'type' => 'transaction',
+                        'title' => 'New transaction recorded',
+                        'message' => $cashierName
+                            ? $cashierName . ' processed a transaction at ' . ($transaction->branch?->branch_name ?? 'the selected branch') . '.'
+                            : 'A new transaction was recorded at ' . ($transaction->branch?->branch_name ?? 'the selected branch') . '.',
+                        'amount' => (float) $transaction->total_amount,
+                        'branch_name' => $transaction->branch?->branch_name,
+                        'created_at' => $transaction->created_at,
+                    ];
+                });
+        }
 
         $userNotifications = collect();
 
-        if ($authUser->hasPermission('users')) {
+        if ($notificationPreferences['notify_user_registrations'] && $authUser->hasPermission('users')) {
             $userNotifications = User::query()
                 ->with(['branch:branch_id,branch_name'])
                 ->whereIn('branch_id', $scopeBranchIds)
@@ -353,8 +368,73 @@ class AuthController extends Controller
                 });
         }
 
+        $lowStockNotifications = collect();
+        if ($notificationPreferences['notify_low_stock']) {
+            $lowStockNotifications = Inventory::query()
+                ->join('medicines', 'inventories.medicine_id', '=', 'medicines.medicine_id')
+                ->join('branches', 'inventories.branch_id', '=', 'branches.branch_id')
+                ->whereIn('inventories.branch_id', $scopeBranchIds)
+                ->whereColumn('medicines.stocks', '<=', 'medicines.reorder_level')
+                ->select([
+                    'medicines.medicine_name',
+                    'medicines.stocks',
+                    'medicines.reorder_level',
+                    'branches.branch_name',
+                    'inventories.updated_at',
+                ])
+                ->latest('inventories.updated_at')
+                ->limit(6)
+                ->get()
+                ->map(fn ($item) => [
+                    'type' => 'inventory',
+                    'title' => 'Low stock alert',
+                    'message' => ($item->medicine_name ?? 'A medicine') . ' is at ' . (int) $item->stocks . ' stock level in ' . ($item->branch_name ?? 'the selected branch') . '.',
+                    'branch_name' => $item->branch_name,
+                    'created_at' => $item->updated_at,
+                ]);
+        }
+
+        $expiryNotifications = collect();
+        if ($notificationPreferences['notify_expiry_alerts']) {
+            $expiryNotifications = Batch::query()
+                ->join('inventories', 'batches.batch_id', '=', 'inventories.batch_id')
+                ->join('medicines', 'inventories.medicine_id', '=', 'medicines.medicine_id')
+                ->join('branches', 'inventories.branch_id', '=', 'branches.branch_id')
+                ->whereIn('inventories.branch_id', $scopeBranchIds)
+                ->whereDate('batches.expiry_date', '<=', now()->addDays(30)->toDateString())
+                ->select([
+                    'medicines.medicine_name',
+                    'branches.branch_name',
+                    'batches.expiry_date',
+                ])
+                ->orderBy('batches.expiry_date')
+                ->limit(6)
+                ->get()
+                ->map(fn ($item) => [
+                    'type' => 'expiry',
+                    'title' => 'Expiry alert',
+                    'message' => ($item->medicine_name ?? 'A medicine') . ' is due to expire on ' . Carbon::parse($item->expiry_date)->format('F j, Y') . ' in ' . ($item->branch_name ?? 'the selected branch') . '.',
+                    'branch_name' => $item->branch_name,
+                    'created_at' => $item->expiry_date,
+                ]);
+        }
+
+        $securityNotifications = collect();
+        if ($notificationPreferences['notify_security_alerts'] && $authUser->last_login_ip) {
+            $securityNotifications = collect([[
+                'type' => 'security',
+                'title' => 'Recent security activity',
+                'message' => 'Your last successful login was recorded from IP ' . $authUser->last_login_ip . '.',
+                'branch_name' => null,
+                'created_at' => $authUser->login_at ?? now(),
+            ]]);
+        }
+
         $notifications = $transactionNotifications
             ->concat($userNotifications)
+            ->concat($lowStockNotifications)
+            ->concat($expiryNotifications)
+            ->concat($securityNotifications)
             ->sortByDesc('created_at')
             ->take(12)
             ->values();
@@ -362,6 +442,110 @@ class AuthController extends Controller
         return $this->response(true, 'Header notifications fetched successfully', [
             'notifications' => $notifications,
             'unread_count' => $notifications->count(),
+        ]);
+    }
+
+    public function settings(Request $request)
+    {
+        $user = User::with(['permissions', 'branch.company'])->find(auth()->id());
+
+        if (!$user) {
+            return $this->response(false, 'User not logged in', null, [
+                'authenticated' => false,
+            ]);
+        }
+
+        $permissionNames = $user->permissions
+            ->pluck('permission_name')
+            ->values()
+            ->toArray();
+
+        $token = $request->user()?->currentAccessToken();
+        $companyData = $this->companyDataForUser($user);
+
+        return $this->response(true, 'Settings loaded successfully', [
+            'profile' => [
+                'user_id' => $user->user_id,
+                'first_name' => $user->first_name,
+                'last_name' => $user->last_name,
+                'email' => $user->email,
+                'address' => $user->address,
+                'branch_id' => $user->branch_id,
+                'branch_name' => $user->branch?->branch_name ?? $companyData?->branch_name,
+                'company_id' => $companyData?->company_id,
+                'company_name' => $companyData?->company_name,
+                'company_email' => $companyData?->company_email,
+                'tin_number' => $companyData?->tin_number,
+            ],
+            'access' => [
+                'role' => $user->role,
+                'status' => $user->status,
+                'permission_count' => count($permissionNames),
+                'permissions' => $permissionNames,
+            ],
+            'notifications' => $this->notificationPreferences($user),
+            'security' => [
+                'login_at' => $user->login_at,
+                'registered_ip' => $user->registered_ip,
+                'last_login_ip' => $user->last_login_ip,
+                'last_seen_ip' => $user->last_seen_ip,
+                'last_password_changed_at' => $user->last_password_changed_at,
+                'session' => [
+                    'token_id' => $token?->id,
+                    'name' => $token?->name,
+                    'issued_at' => $token?->created_at,
+                    'expires_at' => $token?->expires_at,
+                ],
+            ],
+        ]);
+    }
+
+    public function updateNotificationPreferences(Request $request)
+    {
+        $user = User::find(auth()->id());
+
+        if (!$user) {
+            return $this->response(false, 'User not found', null, [
+                'authenticated' => false,
+            ]);
+        }
+
+        $validated = $request->validate([
+            'notify_transactions' => ['required', 'boolean'],
+            'notify_user_registrations' => ['required', 'boolean'],
+            'notify_low_stock' => ['required', 'boolean'],
+            'notify_expiry_alerts' => ['required', 'boolean'],
+            'notify_security_alerts' => ['required', 'boolean'],
+            'notify_browser' => ['required', 'boolean'],
+        ]);
+
+        $availableColumns = $this->availableUserColumns(array_keys($validated));
+        if (count($availableColumns) !== count($validated)) {
+            return $this->response(false, 'Notification preferences are not available until the latest database migration is applied.');
+        }
+
+        $this->safeUserUpdate($user, $validated);
+
+        return $this->response(true, 'Notification preferences updated successfully', $this->notificationPreferences($user->fresh()));
+    }
+
+    public function revokeOtherSessions(Request $request)
+    {
+        $user = User::find(auth()->id());
+
+        if (!$user) {
+            return $this->response(false, 'User not found', null, [
+                'authenticated' => false,
+            ]);
+        }
+
+        $currentToken = $request->user()?->currentAccessToken();
+        $deleted = $user->tokens()
+            ->when($currentToken, fn ($query) => $query->where('id', '!=', $currentToken->id))
+            ->delete();
+
+        return $this->response(true, 'Other sessions revoked successfully', [
+            'revoked_sessions' => $deleted,
         ]);
     }
 
@@ -387,6 +571,10 @@ class AuthController extends Controller
 
         $user->update([
             'password' => Hash::make($validated['new_password']),
+        ]);
+
+        $this->safeUserUpdate($user, [
+            'last_password_changed_at' => now(),
         ]);
 
         return $this->response(true, 'Password changed successfully');
