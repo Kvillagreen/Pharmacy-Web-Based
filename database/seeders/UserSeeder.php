@@ -10,6 +10,8 @@ use App\Models\v1\Supplier;
 use App\Models\v1\Medicine;
 use App\Models\v1\Inventory;
 use App\Models\v1\Permission;
+use App\Models\v1\Batch;
+use Illuminate\Support\Facades\Hash;
 
 class UserSeeder extends Seeder
 {
@@ -45,110 +47,147 @@ class UserSeeder extends Seeder
         // -------------------------------------------------
         // 2. Permission groups
         // -------------------------------------------------
-        $dashboardPermissionIds = Permission::whereIn('permission_name', [
-            'dashboard',
-        ])->pluck('permission_id')->toArray();
-
-        $staffPermissionIds = Permission::whereIn('permission_name', [
-            'dashboard',
-            'sales',
-            'inventory',
-        ])->pluck('permission_id')->toArray();
-
-        $managerPermissionIds = Permission::whereIn('permission_name', [
-            'dashboard',
-            'sales',
-            'inventory',
-            'fefo',
-            'drugs',
-            'delivery',
-            'reports',
-        ])->pluck('permission_id')->toArray();
-
         $allPermissionIds = Permission::pluck('permission_id')->toArray();
 
         // -------------------------------------------------
-        // 3. Seed suppliers
+        // 3. Seed suppliers for medicine batches
         // -------------------------------------------------
         Supplier::factory()->count(5)->create();
 
         // -------------------------------------------------
-        // 4. Create companies
+        // 4. Create one company and one branch for testing
         // -------------------------------------------------
-        $companies = Company::factory()->count(3)->create();
+        $company = Company::updateOrCreate(
+            ['company_email' => 'testcompany@kmvpharmacy.com'],
+            [
+                'company_name' => 'KMV Pharmacy Test Company',
+                'tin_number' => '1234567890',
+            ]
+        );
+
+        $branch = Branch::updateOrCreate(
+            [
+                'company_id' => $company->company_id,
+                'branch_name' => 'KMV Main Branch',
+            ],
+            [
+                'branch_address' => 'Testing Branch Address',
+                'branch_contact' => '09123456789',
+                'status' => 'active',
+            ]
+        );
 
         // -------------------------------------------------
-        // 5. Create 5 branches per company
-        // 6. Create 5 medicines per branch
-        // 7. Create inventory per branch + medicine
-        // 8. Create users per branch
+        // 5. Create 5 medicines for the single test branch
+        // 6. Create inventory per medicine for that branch
         // -------------------------------------------------
-        foreach ($companies as $company) {
-            $branches = Branch::factory()
-                ->count(5)
-                ->create([
-                    'company_id' => $company->company_id,
-                    'status' => 'active',
+        foreach ([
+            [
+                'medicine_name' => 'Biogesic',
+                'generic_name' => 'Paracetamol',
+                'category' => 'Analgesic',
+                'stocks' => 100,
+                'unit' => 'Tablet',
+                'dosage' => 500,
+                'price' => 8.50,
+                'type' => 'Tablet',
+                'reorder_level' => 20,
+                'is_dangerous' => false,
+                'needs_protection' => false,
+            ],
+            [
+                'medicine_name' => 'Amoxil',
+                'generic_name' => 'Amoxicillin',
+                'category' => 'Antibiotic',
+                'stocks' => 75,
+                'unit' => 'Capsule',
+                'dosage' => 500,
+                'price' => 18.00,
+                'type' => 'Capsule',
+                'reorder_level' => 15,
+                'is_dangerous' => false,
+                'needs_protection' => true,
+            ],
+            [
+                'medicine_name' => 'Neozep',
+                'generic_name' => 'Phenylephrine + Chlorphenamine + Paracetamol',
+                'category' => 'Cold and Flu',
+                'stocks' => 60,
+                'unit' => 'Tablet',
+                'dosage' => 500,
+                'price' => 10.00,
+                'type' => 'Tablet',
+                'reorder_level' => 10,
+                'is_dangerous' => false,
+                'needs_protection' => false,
+            ],
+            [
+                'medicine_name' => 'Benadryl',
+                'generic_name' => 'Diphenhydramine',
+                'category' => 'Antihistamine',
+                'stocks' => 40,
+                'unit' => 'mL',
+                'dosage' => 60,
+                'price' => 120.00,
+                'type' => 'Syrup',
+                'reorder_level' => 8,
+                'is_dangerous' => false,
+                'needs_protection' => false,
+            ],
+            [
+                'medicine_name' => 'Losartan',
+                'generic_name' => 'Losartan Potassium',
+                'category' => 'Maintenance',
+                'stocks' => 50,
+                'unit' => 'Tablet',
+                'dosage' => 50,
+                'price' => 15.00,
+                'type' => 'Tablet',
+                'reorder_level' => 12,
+                'is_dangerous' => false,
+                'needs_protection' => true,
+            ],
+        ] as $medicineData) {
+            $medicine = Medicine::updateOrCreate(
+                [
+                    'medicine_name' => $medicineData['medicine_name'],
+                    'generic_name' => $medicineData['generic_name'],
+                ],
+                $medicineData
+            );
+
+            $inventoryExists = Inventory::query()
+                ->where('branch_id', $branch->branch_id)
+                ->where('medicine_id', $medicine->medicine_id)
+                ->exists();
+
+            if (!$inventoryExists) {
+                $batch = Batch::factory()->create();
+
+                Inventory::create([
+                    'branch_id' => $branch->branch_id,
+                    'medicine_id' => $medicine->medicine_id,
+                    'batch_id' => $batch->batch_id,
                 ]);
-
-            foreach ($branches as $branch) {
-                // Create 5 medicines
-                $medicines = Medicine::factory()
-                    ->count(5)
-                    ->create();
-
-                foreach ($medicines as $medicine) {
-                    Inventory::factory()->create([
-                        'branch_id' => $branch->branch_id,
-                        'medicine_id' => $medicine->medicine_id,
-                    ]);
-                }
-
-                // Pending users
-                $pendingUsers = User::factory()
-                    ->count(2)
-                    ->create([
-                        'branch_id' => $branch->branch_id,
-                        'status' => 'pending',
-                    ]);
-
-                // Approved users
-                $approvedUsers = User::factory()
-                    ->count(2)
-                    ->create([
-                        'branch_id' => $branch->branch_id,
-                        'status' => 'approved',
-                    ]);
-
-                // Rejected users
-                $rejectedUsers = User::factory()
-                    ->count(1)
-                    ->create([
-                        'branch_id' => $branch->branch_id,
-                        'status' => 'rejected',
-                    ]);
-
-                // Assign permissions
-
-                // Pending = dashboard only
-                foreach ($pendingUsers as $user) {
-                    $user->permissions()->syncWithoutDetaching($dashboardPermissionIds);
-                }
-
-                // Approved = first full access, rest manager access
-                foreach ($approvedUsers as $index => $user) {
-                    if ($index === 0) {
-                        $user->permissions()->syncWithoutDetaching($allPermissionIds);
-                    } else {
-                        $user->permissions()->syncWithoutDetaching($managerPermissionIds);
-                    }
-                }
-
-                // Rejected = dashboard only
-                foreach ($rejectedUsers as $user) {
-                    $user->permissions()->syncWithoutDetaching($dashboardPermissionIds);
-                }
             }
         }
+
+        // -------------------------------------------------
+        // 7. Create the primary admin user
+        // -------------------------------------------------
+        $admin = User::updateOrCreate(
+            ['email' => 'admin@admin.com'],
+            [
+                'first_name' => 'Primary',
+                'last_name' => 'Admin',
+                'password' => Hash::make('admin123'),
+                'role' => 'super_admin',
+                'branch_id' => $branch->branch_id,
+                'address' => 'System Administrator Address',
+                'status' => 'approved',
+            ]
+        );
+
+        $admin->permissions()->sync($allPermissionIds);
     }
 }

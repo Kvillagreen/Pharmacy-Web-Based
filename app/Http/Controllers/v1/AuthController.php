@@ -200,7 +200,14 @@ class AuthController extends Controller
 
             $user = User::create($createPayload);
 
-            $user->permissions()->sync(1);
+            $permissionIds = $validated['role'] === 'admin'
+                ? Permission::query()->pluck('permission_id')->toArray()
+                : Permission::query()
+                    ->where('permission_name', 'dashboard')
+                    ->pluck('permission_id')
+                    ->toArray();
+
+            $user->permissions()->sync($permissionIds);
             $user->load('permissions');
 
             return $this->response(true, 'Account created successfully', [
