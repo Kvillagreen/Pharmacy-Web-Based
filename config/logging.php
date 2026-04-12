@@ -54,22 +54,25 @@ return [
 
         'stack' => [
             'driver' => 'stack',
-            'channels' => explode(',', (string) env('LOG_STACK', 'single')),
+            'channels' => array_filter(array_map('trim', explode(',', (string) env(
+                'LOG_STACK',
+                env('APP_ENV') === 'production' ? 'stderr,daily' : 'daily'
+            )))),
             'ignore_exceptions' => false,
         ],
 
         'single' => [
             'driver' => 'single',
             'path' => storage_path('logs/laravel.log'),
-            'level' => env('LOG_LEVEL', 'debug'),
+            'level' => env('LOG_LEVEL', env('APP_ENV') === 'production' ? 'info' : 'debug'),
             'replace_placeholders' => true,
         ],
 
         'daily' => [
             'driver' => 'daily',
             'path' => storage_path('logs/laravel.log'),
-            'level' => env('LOG_LEVEL', 'debug'),
-            'days' => env('LOG_DAILY_DAYS', 14),
+            'level' => env('LOG_LEVEL', env('APP_ENV') === 'production' ? 'info' : 'debug'),
+            'days' => env('LOG_DAILY_DAYS', env('APP_ENV') === 'production' ? 30 : 14),
             'replace_placeholders' => true,
         ],
 
@@ -96,7 +99,7 @@ return [
 
         'stderr' => [
             'driver' => 'monolog',
-            'level' => env('LOG_LEVEL', 'debug'),
+            'level' => env('LOG_LEVEL', env('APP_ENV') === 'production' ? 'info' : 'debug'),
             'handler' => StreamHandler::class,
             'handler_with' => [
                 'stream' => 'php://stderr',
@@ -107,14 +110,14 @@ return [
 
         'syslog' => [
             'driver' => 'syslog',
-            'level' => env('LOG_LEVEL', 'debug'),
+            'level' => env('LOG_LEVEL', env('APP_ENV') === 'production' ? 'info' : 'debug'),
             'facility' => env('LOG_SYSLOG_FACILITY', LOG_USER),
             'replace_placeholders' => true,
         ],
 
         'errorlog' => [
             'driver' => 'errorlog',
-            'level' => env('LOG_LEVEL', 'debug'),
+            'level' => env('LOG_LEVEL', env('APP_ENV') === 'production' ? 'info' : 'debug'),
             'replace_placeholders' => true,
         ],
 

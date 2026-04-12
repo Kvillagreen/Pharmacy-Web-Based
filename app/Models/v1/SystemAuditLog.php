@@ -13,6 +13,7 @@ class SystemAuditLog extends Model
 
     protected $fillable = [
         'user_id',
+        'super_admin_id',
         'action',
         'ip_address',
         'details',
@@ -21,5 +22,10 @@ class SystemAuditLog extends Model
     public function user()
     {
         return $this->belongsTo(User::class, 'user_id', 'user_id');
+    }
+
+    public function superAdmin()
+    {
+        return $this->belongsTo(SuperAdmin::class, 'super_admin_id', 'super_admin_id');
     }
 }

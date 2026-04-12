@@ -37,4 +37,9 @@ class Medicine extends Model
         return $this->hasMany(Inventory::class, 'medicine_id', 'medicine_id');
     }
 
+    public function transactionItems()
+    {
+        return $this->hasMany(TransactionItem::class, 'medicine_id', 'medicine_id');
+    }
+
 }

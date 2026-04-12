@@ -11,6 +11,7 @@ use App\Models\v1\Medicine;
 use App\Models\v1\Inventory;
 use App\Models\v1\Permission;
 use App\Models\v1\Batch;
+use App\Models\v1\SuperAdmin;
 use Illuminate\Support\Facades\Hash;
 
 class UserSeeder extends Seeder
@@ -175,19 +176,16 @@ class UserSeeder extends Seeder
         // -------------------------------------------------
         // 7. Create the primary admin user
         // -------------------------------------------------
-        $admin = User::updateOrCreate(
+        $admin = SuperAdmin::updateOrCreate(
             ['email' => 'admin@admin.com'],
             [
                 'first_name' => 'Primary',
                 'last_name' => 'Admin',
                 'password' => Hash::make('admin123'),
-                'role' => 'super_admin',
-                'branch_id' => $branch->branch_id,
                 'address' => 'System Administrator Address',
-                'status' => 'approved',
+                'registered_ip' => '127.0.0.1',
+                'last_seen_ip' => '127.0.0.1',
             ]
         );
-
-        $admin->permissions()->sync($allPermissionIds);
     }
 }

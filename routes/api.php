@@ -14,11 +14,13 @@ use App\Http\Controllers\v1\UserController;
 use App\Http\Controllers\v1\PermissionController;
 use App\Http\Controllers\v1\AuthController;
 use App\Http\Controllers\v1\CompanyController;
+use App\Http\Controllers\v1\SuperAdminAuthController;
 
 Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], function() {
     Route::post('/login', [AuthController::class, 'login']);
     Route::post('/register', [AuthController::class, 'register']);
     Route::post('/branch-public', [BranchController::class,'branch']);
+    Route::post('/admin/login', [SuperAdminAuthController::class, 'login']);
 
     // Protected routes
     Route::middleware('auth:sanctum')->group(function () {
@@ -63,16 +65,25 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
     });
 
     Route::middleware(['auth:sanctum', 'super_admin'])->prefix('admin')->group(function () {
+        Route::post('/logout', [SuperAdminAuthController::class, 'logout']);
+        Route::post('/auth-user', [SuperAdminAuthController::class, 'authUser']);
+        Route::post('/change-password', [SuperAdminAuthController::class, 'changePassword']);
         Route::get('/dashboard', [SuperAdminController::class, 'dashboard']);
         Route::get('/companies', [SuperAdminController::class, 'companies']);
         Route::post('/companies', [SuperAdminController::class, 'createCompany']);
+        Route::get('/companies/{id}/validate-delete', [SuperAdminController::class, 'validateCompanyDeletion']);
+        Route::post('/companies/{id}/delete', [SuperAdminController::class, 'deleteCompany']);
         Route::post('/branches', [SuperAdminController::class, 'createBranch']);
+        Route::get('/branches/{id}/validate-delete', [SuperAdminController::class, 'validateBranchDeletion']);
+        Route::post('/branches/{id}/delete', [SuperAdminController::class, 'deleteBranch']);
         Route::get('/approvals/admins', [SuperAdminController::class, 'pendingAdmins']);
         Route::post('/approvals/admins/{id}/{status}', [SuperAdminController::class, 'updateAdminApproval']);
         Route::get('/logs', [SuperAdminController::class, 'logs']);
         Route::get('/analytics', [SuperAdminController::class, 'analytics']);
         Route::get('/profile', [SuperAdminController::class, 'profile']);
         Route::put('/profile', [SuperAdminController::class, 'updateProfile']);
+        Route::get('/super-admins', [SuperAdminController::class, 'superAdmins']);
+        Route::post('/super-admins', [SuperAdminController::class, 'createSuperAdmin']);
     });
 
         Route::fallback(function (Request $request) {
