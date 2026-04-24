@@ -92,7 +92,7 @@ class ControlledDrugController extends Controller
                 medicines.unit,
                 medicines.type,
                 medicines.price,
-                medicines.stocks,
+                inventories.stocks,
                 medicines.reorder_level,
                 medicines.is_dangerous,
                 medicines.needs_protection,
@@ -130,12 +130,11 @@ class ControlledDrugController extends Controller
             ->select(
                 'medicines.medicine_id',
                 'medicines.price',
-                'medicines.stocks',
+                'inventories.stocks as stocks',
                 'medicines.reorder_level',
                 'medicines.is_dangerous',
                 'medicines.needs_protection'
             )
-            ->distinct()
             ->get();
 
         $dangerousItems = (int) $scopedMedicines->where('is_dangerous', true)->count();

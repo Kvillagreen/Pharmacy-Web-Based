@@ -102,17 +102,13 @@ class ReportController extends Controller
         $averageSale = $transactionCount > 0 ? round($currentRevenue / $transactionCount, 2) : 0;
         $totalDiscount = (float) ($transactionSummary->total_discount ?? 0);
 
-        $inventorySummary = Medicine::query()
+        $inventorySummary = DB::table('inventories')
+            ->join('medicines', 'medicines.medicine_id', '=', 'inventories.medicine_id')
             ->selectRaw(
-                'COALESCE(SUM(price * stocks), 0) as inventory_value,
-                 SUM(CASE WHEN stocks <= reorder_level THEN 1 ELSE 0 END) as low_stock_count'
+                'COALESCE(SUM(medicines.price * inventories.stocks), 0) as inventory_value,
+                 SUM(CASE WHEN inventories.stocks <= medicines.reorder_level THEN 1 ELSE 0 END) as low_stock_count'
             )
-            ->whereExists(function ($query) use ($scopeBranchIds) {
-                $query->select(DB::raw(1))
-                    ->from('inventories')
-                    ->whereColumn('inventories.medicine_id', 'medicines.medicine_id')
-                    ->whereIn('inventories.branch_id', $scopeBranchIds);
-            })
+            ->whereIn('inventories.branch_id', $scopeBranchIds)
             ->first();
 
         $inventoryValue = (float) ($inventorySummary->inventory_value ?? 0);
@@ -228,14 +224,14 @@ class ReportController extends Controller
                 medicines.medicine_id,
                 medicines.medicine_name,
                 medicines.generic_name,
-                medicines.stocks,
+                inventories.stocks,
                 medicines.reorder_level,
                 medicines.price,
                 branches.branch_name,
                 batches.expiry_date
             ')
             ->whereIn('inventories.branch_id', $scopeBranchIds)
-            ->orderByRaw('CASE WHEN medicines.stocks <= medicines.reorder_level THEN 0 ELSE 1 END')
+            ->orderByRaw('CASE WHEN inventories.stocks <= medicines.reorder_level THEN 0 ELSE 1 END')
             ->orderBy('batches.expiry_date')
             ->limit(10)
             ->get()

@@ -8,12 +8,14 @@ use App\Http\Controllers\v1\DashboardController;
 use App\Http\Controllers\v1\ControlledDrugController;
 use App\Http\Controllers\v1\ReportController;
 use App\Http\Controllers\v1\SuperAdminController;
+use App\Http\Controllers\v1\TransactionClaimController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\v1\UserController;
 use App\Http\Controllers\v1\PermissionController;
 use App\Http\Controllers\v1\AuthController;
 use App\Http\Controllers\v1\CompanyController;
+use App\Http\Controllers\v1\InventoryTransferController;
 use App\Http\Controllers\v1\SuperAdminAuthController;
 
 Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], function() {
@@ -25,6 +27,7 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
     // Protected routes
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/header/notifications', [AuthController::class, 'headerNotifications']);
+        Route::put('/header/notifications/{id}/read', [AuthController::class, 'markNotificationRead']);
         Route::get('/dashboard', [DashboardController::class, 'index']);
         Route::get('/controlled-drugs', [ControlledDrugController::class, 'index']);
         Route::get('/reports', [ReportController::class, 'index']);
@@ -41,6 +44,9 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
         Route::get('/fefo/{fefo}', [FefoController::class, 'show']);
         Route::get('/transaction', [TransactionController::class, 'index']);
         Route::get('/transaction/{transaction}', [TransactionController::class, 'show']);
+        Route::get('/transaction-claims', [TransactionClaimController::class, 'index']);
+        Route::get('/transaction-claims/{transaction}', [TransactionClaimController::class, 'show']);
+        Route::get('/inventory-transfer', [InventoryTransferController::class, 'index']);
         Route::get('/company', [CompanyController::class, 'index']);
         Route::get('/company/{company}', [CompanyController::class, 'show']);
         Route::get('/user', [UserController::class, 'index']);
@@ -57,9 +63,16 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
         Route::apiResource('/branch', BranchController::class)->except(['index', 'show']);
         Route::apiResource('/permissions', PermissionController::class)->except(['index', 'show']);
         Route::post('/change-password', [AuthController::class, 'changePassword']);
+        Route::post('/medicine/merge-duplicates', [MedicineController::class, 'mergeDuplicates']);
         Route::apiResource('/medicine', MedicineController::class)->except(['index', 'show']);
         Route::apiResource('/fefo', FefoController::class)->except(['index', 'show']);
         Route::apiResource('/transaction', TransactionController::class)->except(['index', 'show']);
+        Route::post('/transaction-claims/{transaction}/documents', [TransactionClaimController::class, 'uploadDocuments']);
+        Route::put('/transaction-claims/{transaction}/overview', [TransactionClaimController::class, 'updateOverview']);
+        Route::post('/transaction-claims/{transaction}/notes', [TransactionClaimController::class, 'addNote']);
+        Route::post('/inventory-transfer', [InventoryTransferController::class, 'store']);
+        Route::post('/inventory-transfer/{id}/accept', [InventoryTransferController::class, 'accept']);
+        Route::post('/inventory-transfer/{id}/decline', [InventoryTransferController::class, 'decline']);
         Route::apiResource('/company', CompanyController::class)->except(['index', 'show']);
         Route::post('/user/update-status/{id}/{status}', [UserController::class, 'updateUserStatus']);
         Route::post('/user/update-branch/{id}/{branch_id}', [UserController::class, 'updateUserBranch']);

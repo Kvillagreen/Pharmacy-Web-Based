@@ -4,6 +4,8 @@ namespace App\Models\v1;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Storage;
+
 class Transaction extends Model
 {
 
@@ -18,6 +20,7 @@ class Transaction extends Model
         'user_id',
         'branch_id',
         'transaction_type_id',
+        'transaction_type',
         'total_amount',
         'payment_method',
         'sub_total',
@@ -26,7 +29,29 @@ class Transaction extends Model
         'discount_type',
         'scpwd_id_number',
         'used_amount',
+        'hmo_provider',
+        'patient_name',
+        'membership_id',
+        'coverage_type',
+        'prescription_path',
+        'member_id_image_path',
+        'documents_submitted',
+        'claim_status',
+        'claim_amount_covered',
+        'documents_completed_at',
     ];
+
+    protected $appends = [
+        'prescription_url',
+        'member_id_image_url',
+    ];
+
+    protected $casts = [
+        'documents_submitted' => 'boolean',
+        'claim_amount_covered' => 'decimal:2',
+        'documents_completed_at' => 'datetime',
+    ];
+
     public function transactions()
     {
         return $this->belongsTo(TransactionType::class, 'transaction_type_id', 'transaction_type_id');
@@ -48,5 +73,35 @@ class Transaction extends Model
     public function branch()
     {
         return $this->belongsTo(Branch::class, 'branch_id', 'branch_id');
+    }
+
+    public function claimUpdates()
+    {
+        return $this->hasMany(TransactionClaimUpdate::class, 'transaction_id', 'transaction_id')
+            ->latest('created_at');
+    }
+
+    public function claimNotes()
+    {
+        return $this->hasMany(TransactionClaimNote::class, 'transaction_id', 'transaction_id')
+            ->latest('created_at');
+    }
+
+    public function getPrescriptionUrlAttribute(): ?string
+    {
+        if (!$this->prescription_path) {
+            return null;
+        }
+
+        return Storage::disk('public')->url($this->prescription_path);
+    }
+
+    public function getMemberIdImageUrlAttribute(): ?string
+    {
+        if (!$this->member_id_image_path) {
+            return null;
+        }
+
+        return Storage::disk('public')->url($this->member_id_image_path);
     }
 }

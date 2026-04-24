@@ -7,6 +7,7 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
+
 class MethodTransactionRequest extends FormRequest
 {
     /**
@@ -23,42 +24,114 @@ class MethodTransactionRequest extends FormRequest
      * @return array<string, ValidationRule|array<mixed>|string>
      */
     public function rules(): array
-{
-    return [
-        'user_id' => ['required', 'integer', 'exists:users,user_id'],
-        'branch_id' => ['required', 'integer', 'exists:branches,branch_id'],
+    {
+        $transactionType = strtolower((string) $this->input('transaction_type', 'regular'));
+        $documentsSubmitted = $this->boolean('documents_submitted');
 
-        'total_amount' => ['required', 'numeric', 'min:0'],
-        'sub_total' => ['required', 'numeric', 'min:0'],
-        'change' => ['required', 'numeric', 'min:0'],
-        'used_amount' => ['required', 'numeric', 'min:0'],
+        return [
+            'user_id' => ['required', 'integer', 'exists:users,user_id'],
+            'branch_id' => ['required', 'integer', 'exists:branches,branch_id'],
 
-        'payment_method' => ['required', 'string', 'max:50'],
+            'transaction_type' => ['required', Rule::in(['regular', 'hmo', 'philhealth', 'yakap'])],
+            'total_amount' => ['required', 'numeric', 'min:0'],
+            'sub_total' => ['required', 'numeric', 'min:0'],
+            'change' => ['required', 'numeric', 'min:0'],
+            'used_amount' => ['required', 'numeric', 'min:0'],
 
-        'discount' => ['required', 'numeric', 'min:0'],'discount_type' => ['nullable', Rule::in([
-            'Discount',
-            'SCPWD'
-        ])],
-        'scpwd_id_number' => ['nullable', 'string', 'max:50'],
+            'payment_method' => ['required', 'string', 'max:50'],
 
-        'request_token' => ['nullable', 'string', 'max:100'],
+            'discount' => ['required', 'numeric', 'min:0'],
+            'discount_type' => ['nullable', Rule::in([
+                'Discount',
+                'SCPWD',
+            ])],
+            'scpwd_id_number' => ['nullable', 'string', 'max:50'],
 
-        'items' => ['required', 'array', 'min:1'],
-        'items.*.medicine_id' => ['required', 'integer', 'exists:medicines,medicine_id'],
-        'items.*.quantity' => ['required', 'integer', 'min:1'],
-    ];
-}
+            'hmo_provider' => [
+                Rule::requiredIf(in_array($transactionType, ['hmo', 'philhealth'], true)),
+                'nullable',
+                'string',
+                'max:100',
+            ],
+            'patient_name' => [
+                Rule::requiredIf(in_array($transactionType, ['hmo', 'philhealth', 'yakap'], true)),
+                'nullable',
+                'string',
+                'max:150',
+            ],
+            'membership_id' => [
+                Rule::requiredIf(in_array($transactionType, ['hmo', 'philhealth', 'yakap'], true)),
+                'nullable',
+                'string',
+                'max:100',
+            ],
+            'coverage_type' => [
+                Rule::requiredIf(in_array($transactionType, ['hmo', 'philhealth'], true)),
+                'nullable',
+                Rule::in(['full', 'partial']),
+            ],
+            'documents_submitted' => ['nullable', 'boolean'],
+            'prescription' => [
+                Rule::requiredIf(
+                    $transactionType === 'yakap'
+                    || (in_array($transactionType, ['hmo', 'philhealth'], true) && $documentsSubmitted)
+                ),
+                'nullable',
+                'file',
+                'mimes:jpg,jpeg,png,pdf',
+                'max:5120',
+            ],
+            'member_id_image' => [
+                Rule::requiredIf(
+                    $transactionType === 'yakap'
+                    || (in_array($transactionType, ['hmo', 'philhealth'], true) && $documentsSubmitted)
+                ),
+                'nullable',
+                'file',
+                'mimes:jpg,jpeg,png,pdf',
+                'max:5120',
+            ],
+            'request_token' => ['nullable', 'string', 'max:100'],
+
+            'items' => ['required', 'array', 'min:1'],
+            'items.*.medicine_id' => ['required', 'integer', 'exists:medicines,medicine_id'],
+            'items.*.quantity' => ['required', 'integer', 'min:1'],
+        ];
+    }
     public function messages(): array
     {
         return [
+            'transaction_type.required' => 'Transaction type is required.',
             'payment_method.required' => 'Payment Method is required.',
             'sub_total.required' => 'Sub Total is required.',
             'change.required' => 'Change is required.',
             'used_amount.required' => 'Used Amount is required.',
+            'hmo_provider.required' => 'Provider is required for this transaction type.',
+            'patient_name.required' => 'Patient name is required for this transaction type.',
+            'membership_id.required' => 'Membership ID is required for this transaction type.',
+            'coverage_type.required' => 'Coverage type is required for this transaction type.',
+            'prescription.required' => 'Prescription document is required.',
+            'member_id_image.required' => 'ID image document is required.',
             'items.required' => 'Items are required.',
             'items.*.medicine_id.required' => 'Medicine ID is required for each item.',
             'items.*.quantity.required' => 'Quantity is required for each item.',
         ];
+    }
+
+    public function withValidator($validator): void
+    {
+        $validator->after(function ($validator) {
+            $transactionType = strtolower((string) $this->input('transaction_type', 'regular'));
+            $hasPrescription = $this->hasFile('prescription');
+            $hasMemberIdImage = $this->hasFile('member_id_image');
+
+            if (in_array($transactionType, ['hmo', 'philhealth', 'yakap'], true) && ($hasPrescription xor $hasMemberIdImage)) {
+                $validator->errors()->add(
+                    'documents',
+                    'Please provide both the prescription and ID document together.'
+                );
+            }
+        });
     }
 
 protected function failedValidation(Validator $validator)

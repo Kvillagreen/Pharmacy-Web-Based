@@ -26,6 +26,7 @@ class Medicine extends Model
         "type",
         "reorder_level",
         "is_dangerous",
+        "is_yakap_eligible",
         "needs_protection",
         ];
     protected $columnMap = [
@@ -34,7 +35,7 @@ class Medicine extends Model
 
     public function inventories()
     {
-        return $this->hasMany(Inventory::class, 'medicine_id', 'medicine_id');
+        return $this->hasOne(Inventory::class, 'medicine_id', 'medicine_id');
     }
 
     public function transactionItems()

@@ -12,6 +12,7 @@ use App\Models\v1\Batch;
 use App\Models\v1\Inventory;
 use App\Models\v1\SystemAuditLog;
 use App\Models\v1\Transaction;
+use App\Models\v1\UserNotification;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -91,7 +92,7 @@ class AuthController extends Controller
     public function login(LoginRequest $request)
     {
         try{
-            $validated = $request->validated();
+        $validated = $request->validated();
         $key = Str::lower($validated['email']) . '|' . $request->ip();
 
         if (RateLimiter::tooManyAttempts($key, 5)) {
@@ -160,7 +161,6 @@ class AuthController extends Controller
             'permissions' => $permissionNames,
             'created_at' => $user->created_at,
             'login_at' => $user->login_at,
-
         ];
 
         return $this->response(true, 'Login successful', $responseUser, [
@@ -220,7 +220,7 @@ class AuthController extends Controller
 
             $user = User::create($createPayload);
 
-            $permissionIds = $validated['role'] === 'admin'
+            $permissionIds = in_array($validated['role'], ['admin', 'owner'], true)
                 ? Permission::query()->pluck('permission_id')->toArray()
                 : Permission::query()
                     ->where('permission_name', 'dashboard')
@@ -320,29 +320,27 @@ class AuthController extends Controller
         $scopeBranchIds = $branchQuery->pluck('branch_id');
         $notificationPreferences = $this->notificationPreferences($authUser);
 
-        $transactionNotifications = collect();
-        if ($notificationPreferences['notify_transactions']) {
-            $transactionNotifications = Transaction::query()
-                ->with(['branch:branch_id,branch_name', 'user:user_id,first_name,last_name'])
-                ->whereIn('branch_id', $scopeBranchIds)
-                ->latest('created_at')
-                ->limit(8)
-                ->get()
-                ->map(function ($transaction) {
-                    $cashierName = trim(($transaction->user?->first_name ?? '') . ' ' . ($transaction->user?->last_name ?? ''));
-
-                    return [
-                        'type' => 'transaction',
-                        'title' => 'New transaction recorded',
-                        'message' => $cashierName
-                            ? $cashierName . ' processed a transaction at ' . ($transaction->branch?->branch_name ?? 'the selected branch') . '.'
-                            : 'A new transaction was recorded at ' . ($transaction->branch?->branch_name ?? 'the selected branch') . '.',
-                        'amount' => (float) $transaction->total_amount,
-                        'branch_name' => $transaction->branch?->branch_name,
-                        'created_at' => $transaction->created_at,
-                    ];
-                });
-        }
+        $storedNotifications = UserNotification::query()
+            ->where('user_id', $authUser->user_id)
+            ->where(function ($query) use ($scopeBranchIds) {
+                $query->whereNull('branch_id')
+                    ->orWhereIn('branch_id', $scopeBranchIds);
+            })
+            ->latest('created_at')
+            ->limit(12)
+            ->get()
+            ->map(fn (UserNotification $notification) => [
+                'notification_id' => $notification->user_notification_id,
+                'type' => $notification->type,
+                'title' => $notification->title,
+                'message' => $notification->message,
+                'branch_name' => $notification->branch?->branch_name,
+                'created_at' => $notification->created_at,
+                'read_at' => $notification->read_at,
+                'meta' => $notification->meta ?? [],
+                'is_actionable' => in_array($notification->type, ['transfer_request'], true)
+                    || !empty(($notification->meta ?? [])['inventory_transfer_id']),
+            ]);
 
         $userNotifications = collect();
 
@@ -374,10 +372,10 @@ class AuthController extends Controller
                 ->join('medicines', 'inventories.medicine_id', '=', 'medicines.medicine_id')
                 ->join('branches', 'inventories.branch_id', '=', 'branches.branch_id')
                 ->whereIn('inventories.branch_id', $scopeBranchIds)
-                ->whereColumn('medicines.stocks', '<=', 'medicines.reorder_level')
+                ->whereColumn('inventories.stocks', '<=', 'medicines.reorder_level')
                 ->select([
                     'medicines.medicine_name',
-                    'medicines.stocks',
+                    'inventories.stocks',
                     'medicines.reorder_level',
                     'branches.branch_name',
                     'inventories.updated_at',
@@ -430,11 +428,14 @@ class AuthController extends Controller
             ]]);
         }
 
-        $notifications = $transactionNotifications
+        $notifications = $storedNotifications
             ->concat($userNotifications)
             ->concat($lowStockNotifications)
             ->concat($expiryNotifications)
             ->concat($securityNotifications)
+            ->sortByDesc(function ($notification) {
+                return !empty($notification['is_actionable']) ? 1 : 0;
+            })
             ->sortByDesc('created_at')
             ->take(12)
             ->values();
@@ -443,6 +444,31 @@ class AuthController extends Controller
             'notifications' => $notifications,
             'unread_count' => $notifications->count(),
         ]);
+    }
+
+    public function markNotificationRead(Request $request, string $id)
+    {
+        $user = User::find(auth()->id());
+
+        if (!$user) {
+            return $this->response(false, 'User not found');
+        }
+
+        $notification = UserNotification::query()
+            ->where('user_notification_id', $id)
+            ->where('user_id', $user->user_id)
+            ->first();
+
+        if (!$notification) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Notification not found',
+            ], 404);
+        }
+
+        $notification->update(['read_at' => now()]);
+
+        return $this->response(true, 'Notification marked as read');
     }
 
     public function settings(Request $request)

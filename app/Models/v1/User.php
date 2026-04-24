@@ -52,7 +52,7 @@ class User extends Authenticatable
         'remember_token',
     ];
 
-    public function user(){
+    public function transactions(){
         return $this->hasMany(Transaction::class, 'user_id', 'user_id');
     }
     public function branch()
@@ -68,6 +68,11 @@ class User extends Authenticatable
             'user_id',
             'permission_id'
         )->withTimestamps();
+    }
+
+    public function notifications()
+    {
+        return $this->hasMany(UserNotification::class, 'user_id', 'user_id');
     }
 
     // ✅ helper function

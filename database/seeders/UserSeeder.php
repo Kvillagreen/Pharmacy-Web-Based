@@ -6,7 +6,6 @@ use Illuminate\Database\Seeder;
 use App\Models\v1\User;
 use App\Models\v1\Branch;
 use App\Models\v1\Company;
-use App\Models\v1\Supplier;
 use App\Models\v1\Medicine;
 use App\Models\v1\Inventory;
 use App\Models\v1\Permission;
@@ -33,6 +32,7 @@ class UserSeeder extends Seeder
             ['permission_name' => 'drugs', 'description' => 'Can access drugs page'],
             ['permission_name' => 'delivery', 'description' => 'Can access delivery page'],
             ['permission_name' => 'reports', 'description' => 'Can access reports page'],
+            ['permission_name' => 'claims', 'description' => 'Can access HMO and PhilHealth claims page'],
             ['permission_name' => 'settings', 'description' => 'Can access settings page'],
             ['permission_name' => 'users', 'description' => 'Can access users page'],
             ['permission_name' => 'branches', 'description' => 'Can access branches page'],
@@ -51,12 +51,7 @@ class UserSeeder extends Seeder
         $allPermissionIds = Permission::pluck('permission_id')->toArray();
 
         // -------------------------------------------------
-        // 3. Seed suppliers for medicine batches
-        // -------------------------------------------------
-        Supplier::factory()->count(5)->create();
-
-        // -------------------------------------------------
-        // 4. Create one company and one branch for testing
+        // 3. Create one company and one branch for testing
         // -------------------------------------------------
         $company = Company::updateOrCreate(
             ['company_email' => 'testcompany@kmvpharmacy.com'],
@@ -174,7 +169,7 @@ class UserSeeder extends Seeder
         }
 
         // -------------------------------------------------
-        // 7. Create the primary admin user
+        // 6. Create the primary admin user
         // -------------------------------------------------
         $admin = SuperAdmin::updateOrCreate(
             ['email' => 'admin@admin.com'],

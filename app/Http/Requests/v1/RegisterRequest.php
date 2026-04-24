@@ -22,7 +22,7 @@ class RegisterRequest extends FormRequest
             'email' => ['required', 'email', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8'],
             'branchId' => ['required', 'exists:branches,branch_id'],
-            'role' => ['required', Rule::in(['pharmacist', 'admin', 'inventory', 'user','manager'])],
+            'role' => ['required', Rule::in(['staff', 'pharmacist', 'owner', 'branch_manager', 'admin'])],
             'address' => ['required', 'string', 'max:255'],
         ];
     }
@@ -40,7 +40,7 @@ class RegisterRequest extends FormRequest
             'branchId.required' => 'Branch is required.',
             'branchId.exists' => 'Branch does not exist.',
             'role.required' => 'Role is required.',
-            'role.in' => 'Role must be one of pharmacy, admin, inventory, or user.',
+            'role.in' => 'Role must be one of staff, pharmacist, owner, branch manager, or admin.',
             'address.required' => 'Address is required.',
         ];
     }

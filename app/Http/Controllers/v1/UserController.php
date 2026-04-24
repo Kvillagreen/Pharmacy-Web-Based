@@ -88,7 +88,7 @@ class UserController extends Controller
             ->count();
 
         $managerCount = (clone $queryOnly)
-            ->where('role', 'manager')
+            ->where('role', 'branch_manager')
             ->count();
 
         $activeCount = (clone $queryOnly)
@@ -167,7 +167,7 @@ class UserController extends Controller
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8', 'confirmed'],
             'branch_id' => ['required', 'integer', 'exists:branches,branch_id'],
-            'role' => ['required', Rule::in(['pharmacist', 'admin', 'inventory', 'user', 'manager'])],
+            'role' => ['required', Rule::in(['staff', 'pharmacist', 'owner', 'branch_manager', 'admin'])],
             'address' => ['required', 'string', 'max:500'],
             'permission_ids' => ['nullable', 'array'],
             'permission_ids.*' => ['integer', 'exists:permissions,permission_id'],

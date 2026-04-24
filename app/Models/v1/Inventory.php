@@ -17,7 +17,7 @@ class Inventory extends Model
         'branch_id',
         'medicine_id',
         'batch_id',
-        // add any other fields you may have
+        'stocks',
     ];
 
      public function medicine()
@@ -27,10 +27,10 @@ class Inventory extends Model
 
     public function batch()
     {
-        return $this->belongsTo(Batch::class, 'batch_id', 'batch_id')
-                    ->with('supplier'); // eager load supplier
+        return $this->belongsTo(Batch::class, 'batch_id', 'batch_id');
     }
-        public function branch()
+
+    public function branch()
     {
         return $this->belongsTo(Branch::class, 'branch_id', 'branch_id');
     }

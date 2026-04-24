@@ -18,7 +18,9 @@ class MedicineQuery {
 
     // ✅ Optional column mapping (if DB column differs)
     protected $columnMap = [
-        // "medicine_name" => "med_name"
+        'stocks' => 'inventories.stocks',
+        'created_at' => 'inventories.created_at',
+        'medicine_id' => 'inventories.medicine_id',
     ];
 
     // ✅ Operators mapping

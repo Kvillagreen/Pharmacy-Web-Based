@@ -14,7 +14,6 @@ class Batch extends Model
 
     protected $fillable = [
         'medicine_id',
-        'supplier_id',
         'expiry_date',
         'received_date',
         'mfg_date',
@@ -22,10 +21,6 @@ class Batch extends Model
         'status',
     ];
 
-    public function supplier()
-    {
-        return $this->belongsTo(Supplier::class, 'supplier_id', 'supplier_id');
-    }
     public function inventories()
     {
         return $this->hasMany(Inventory::class, 'batch_id', 'batch_id');

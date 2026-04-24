@@ -123,19 +123,15 @@ class DashboardController extends Controller
 
             $averageSale = $currentTransactions > 0 ? round($currentRevenue / $currentTransactions, 2) : 0;
 
-            $inventorySummary = Medicine::query()
+            $inventorySummary = DB::table('inventories')
+                ->join('medicines', 'medicines.medicine_id', '=', 'inventories.medicine_id')
                 ->selectRaw(
                     'COUNT(*) as total_items,
-                     COALESCE(SUM(price * stocks), 0) as inventory_value,
-                     SUM(CASE WHEN stocks <= reorder_level THEN 1 ELSE 0 END) as low_stock_count,
-                     SUM(CASE WHEN stocks <= 0 THEN 1 ELSE 0 END) as out_of_stock_count'
+                     COALESCE(SUM(medicines.price * inventories.stocks), 0) as inventory_value,
+                     SUM(CASE WHEN inventories.stocks <= medicines.reorder_level THEN 1 ELSE 0 END) as low_stock_count,
+                     SUM(CASE WHEN inventories.stocks <= 0 THEN 1 ELSE 0 END) as out_of_stock_count'
                 )
-                ->whereExists(function ($query) use ($scopeBranchIds) {
-                    $query->select(DB::raw(1))
-                        ->from('inventories')
-                        ->whereColumn('inventories.medicine_id', 'medicines.medicine_id')
-                        ->whereIn('inventories.branch_id', $scopeBranchIds);
-                })
+                ->whereIn('inventories.branch_id', $scopeBranchIds)
                 ->first();
 
             $inventoryValue = (float) ($inventorySummary->inventory_value ?? 0);
