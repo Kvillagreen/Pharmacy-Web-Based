@@ -29,16 +29,11 @@ class Transaction extends Model
         'discount_type',
         'scpwd_id_number',
         'used_amount',
-        'hmo_provider',
         'patient_name',
         'membership_id',
-        'coverage_type',
         'prescription_path',
         'member_id_image_path',
         'documents_submitted',
-        'claim_status',
-        'claim_amount_covered',
-        'documents_completed_at',
     ];
 
     protected $appends = [
@@ -48,8 +43,6 @@ class Transaction extends Model
 
     protected $casts = [
         'documents_submitted' => 'boolean',
-        'claim_amount_covered' => 'decimal:2',
-        'documents_completed_at' => 'datetime',
     ];
 
     public function transactions()
@@ -73,18 +66,6 @@ class Transaction extends Model
     public function branch()
     {
         return $this->belongsTo(Branch::class, 'branch_id', 'branch_id');
-    }
-
-    public function claimUpdates()
-    {
-        return $this->hasMany(TransactionClaimUpdate::class, 'transaction_id', 'transaction_id')
-            ->latest('created_at');
-    }
-
-    public function claimNotes()
-    {
-        return $this->hasMany(TransactionClaimNote::class, 'transaction_id', 'transaction_id')
-            ->latest('created_at');
     }
 
     public function getPrescriptionUrlAttribute(): ?string

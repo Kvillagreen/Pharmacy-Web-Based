@@ -32,7 +32,6 @@ class UserSeeder extends Seeder
             ['permission_name' => 'drugs', 'description' => 'Can access drugs page'],
             ['permission_name' => 'delivery', 'description' => 'Can access delivery page'],
             ['permission_name' => 'reports', 'description' => 'Can access reports page'],
-            ['permission_name' => 'claims', 'description' => 'Can access HMO and PhilHealth claims page'],
             ['permission_name' => 'settings', 'description' => 'Can access settings page'],
             ['permission_name' => 'users', 'description' => 'Can access users page'],
             ['permission_name' => 'branches', 'description' => 'Can access branches page'],

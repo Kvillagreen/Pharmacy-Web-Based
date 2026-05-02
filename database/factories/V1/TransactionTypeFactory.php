@@ -17,7 +17,7 @@ class TransactionTypeFactory extends Factory
      */
     public function definition(): array
     {
-        $type = ['Regular', 'HMO', 'Philhealth'];
+        $type = ['Regular', 'Yakap'];
          return [
         "transaction_type_name"=> $this->faker->word(),
         "customer_full_name"=> $this->faker->name(),

@@ -8,7 +8,6 @@ use App\Models\v1\Batch;
 use App\Models\v1\Inventory;
 use App\Models\v1\Medicine;
 use App\Models\v1\Transaction;
-use App\Models\v1\TransactionClaimUpdate;
 use App\Models\v1\TransactionItem;
 use App\Models\v1\UserNotification;
 use App\Services\v1\MedicineQuery;
@@ -256,8 +255,6 @@ class TransactionController extends Controller
                 'prescription_path' => $this->storeTransactionDocument($request, 'prescription'),
                 'member_id_image_path' => $this->storeTransactionDocument($request, 'member_id_image'),
                 'documents_submitted' => $this->documentsWereSubmitted($request, $data),
-                'claim_status' => $this->resolveInitialClaimStatus($request, $data),
-                'documents_completed_at' => $this->documentsWereSubmitted($request, $data) ? now() : null,
             ]);
 
             $transactionItems = [];
@@ -307,7 +304,6 @@ class TransactionController extends Controller
 
             $transaction->load(['items.medicine', 'branch:branch_id,branch_name', 'user:user_id,first_name,last_name']);
 
-            $this->createClaimTimeline($transaction, $data);
             $this->createTransactionNotifications($transaction);
 
             DB::commit();
@@ -401,40 +397,5 @@ class TransactionController extends Controller
         }
 
         return $request->hasFile('prescription') && $request->hasFile('member_id_image');
-    }
-
-    private function resolveInitialClaimStatus(Request $request, array $data): string
-    {
-        $transactionType = $data['transaction_type'] ?? 'regular';
-
-        if (!in_array($transactionType, ['hmo', 'philhealth'], true)) {
-            return 'not_applicable';
-        }
-
-        return $this->documentsWereSubmitted($request, $data)
-            ? 'documents_ready'
-            : 'pending_documents';
-    }
-
-    private function createClaimTimeline(Transaction $transaction, array $data): void
-    {
-        if (!in_array($transaction->transaction_type, ['hmo', 'philhealth'], true)) {
-            return;
-        }
-
-        TransactionClaimUpdate::create([
-            'transaction_id' => $transaction->transaction_id,
-            'user_id' => $transaction->user_id,
-            'update_type' => 'created',
-            'title' => 'Claim transaction created',
-            'description' => $transaction->documents_submitted
-                ? 'The claim transaction was created with the required documents attached.'
-                : 'The claim transaction was created and documents will be submitted later.',
-            'meta' => [
-                'transaction_type' => $transaction->transaction_type,
-                'provider' => $data['hmo_provider'] ?? null,
-                'documents_submitted' => $transaction->documents_submitted,
-            ],
-        ]);
     }
 }

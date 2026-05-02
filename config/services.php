@@ -35,4 +35,11 @@ return [
         ],
     ],
 
+    'fortmed_sms' => [
+        'base_url' => env('FORTMED_SMS_BASE_URL', 'https://fortmed.org/web/FMCSMS/api'),
+        'api_key' => env('FORTMED_SMS_API_KEY'),
+        'sender_name' => env('FORTMED_SMS_SENDER_NAME', env('APP_NAME', 'Pharmacy Web')),
+        'from_number' => env('FORTMED_SMS_FROM_NUMBER'),
+    ],
+
 ];
