@@ -26,7 +26,6 @@ class Medicine extends Model
         "type",
         "reorder_level",
         "is_dangerous",
-        "is_yakap_eligible",
         "needs_protection",
         ];
     protected $columnMap = [

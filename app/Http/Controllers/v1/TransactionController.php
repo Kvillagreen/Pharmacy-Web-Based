@@ -7,6 +7,7 @@ use App\Http\Requests\v1\MethodTransactionRequest;
 use App\Models\v1\Batch;
 use App\Models\v1\Inventory;
 use App\Models\v1\Medicine;
+use App\Models\v1\RegulatedCustomer;
 use App\Models\v1\Transaction;
 use App\Models\v1\TransactionItem;
 use App\Models\v1\UserNotification;
@@ -45,7 +46,6 @@ class TransactionController extends Controller
                 'medicines.unit',
                 'medicines.type',
                 'medicines.is_dangerous',
-                'medicines.is_yakap_eligible',
                 'medicines.needs_protection',
                 'batches.batch_id',
                 'batches.expiry_date',
@@ -214,6 +214,8 @@ class TransactionController extends Controller
                     'inventories.batch_id',
                     'inventories.stocks',
                     'medicines.medicine_name',
+                    'medicines.is_dangerous',
+                    'medicines.needs_protection',
                     'batches.expiry_date',
                     'batches.received_date',
                 ])
@@ -233,28 +235,27 @@ class TransactionController extends Controller
                 }
             }
 
-            if (($data['transaction_type'] ?? 'regular') === 'yakap') {
-                $yakapEligibleIds = Medicine::query()
-                    ->whereIn('medicine_id', $requestedQuantities->keys())
-                    ->where('is_yakap_eligible', true)
-                    ->pluck('medicine_id')
-                    ->map(fn ($id) => (int) $id)
-                    ->all();
-
-                $invalidMedicineIds = $requestedQuantities->keys()
-                    ->map(fn ($id) => (int) $id)
-                    ->diff($yakapEligibleIds);
-
-                if ($invalidMedicineIds->isNotEmpty()) {
-                    throw new \RuntimeException('Only Yakap eligible medicines can be sold under a Yakap transaction.');
-                }
-            }
+            $regulatedClassification = $this->resolveRegulatedClassification($inventoryRows);
+            $regulatedCustomer = $regulatedClassification !== null
+                ? $this->storeRegulatedCustomer($data)
+                : null;
 
             $transaction = Transaction::create([
                 ...collect($data)->except('items')->toArray(),
                 'prescription_path' => $this->storeTransactionDocument($request, 'prescription'),
                 'member_id_image_path' => $this->storeTransactionDocument($request, 'member_id_image'),
-                'documents_submitted' => $this->documentsWereSubmitted($request, $data),
+                'documents_submitted' => $this->documentsWereSubmitted($request, $regulatedClassification),
+                'regulated_customer_id' => $regulatedCustomer?->regulated_customer_id,
+                'customer_contact_number' => $regulatedCustomer?->contact_number,
+                'customer_id_number' => $regulatedCustomer?->id_number,
+                'customer_address_line' => $regulatedCustomer?->address_line,
+                'customer_barangay' => $regulatedCustomer?->barangay,
+                'customer_city_municipality' => $regulatedCustomer?->city_municipality,
+                'customer_province' => $regulatedCustomer?->province,
+                'customer_postal_code' => $regulatedCustomer?->postal_code,
+                'customer_country' => $regulatedCustomer?->country,
+                'customer_formatted_address' => $regulatedCustomer?->formatted_address,
+                'regulated_classification' => $regulatedClassification,
             ]);
 
             $transactionItems = [];
@@ -302,7 +303,7 @@ class TransactionController extends Controller
                 $this->syncMedicineStocks((int) $medicineId);
             }
 
-            $transaction->load(['items.medicine', 'branch:branch_id,branch_name', 'user:user_id,first_name,last_name']);
+            $transaction->load(['items.medicine', 'branch:branch_id,branch_name', 'user:user_id,first_name,last_name', 'regulatedCustomer']);
 
             $this->createTransactionNotifications($transaction);
 
@@ -387,15 +388,83 @@ class TransactionController extends Controller
             return null;
         }
 
-        return $request->file($field)->store('transactions/documents', 'public');
+        return $request->file($field)->store('transactions/documents', config('transactions.documents_disk', 'public'));
     }
 
-    private function documentsWereSubmitted(Request $request, array $data): bool
+    private function documentsWereSubmitted(Request $request, ?string $regulatedClassification): bool
     {
-        if (($data['transaction_type'] ?? 'regular') === 'regular') {
+        if ($regulatedClassification === null) {
             return false;
         }
 
         return $request->hasFile('prescription') && $request->hasFile('member_id_image');
+    }
+
+    private function resolveRegulatedClassification($inventoryRows): ?string
+    {
+        $hasDangerous = collect($inventoryRows)
+            ->flatten(1)
+            ->contains(fn ($row) => (bool) ($row->is_dangerous ?? false));
+
+        $hasControlled = collect($inventoryRows)
+            ->flatten(1)
+            ->contains(fn ($row) => (bool) ($row->needs_protection ?? false));
+
+        if ($hasDangerous) {
+            return 'dangerous';
+        }
+
+        if ($hasControlled) {
+            return 'controlled';
+        }
+
+        return null;
+    }
+
+    private function storeRegulatedCustomer(array $data): RegulatedCustomer
+    {
+        $formattedAddress = $this->formatUnifiedAddress([
+            $data['customer_address_line'] ?? null,
+            $data['customer_barangay'] ?? null,
+            $data['customer_city_municipality'] ?? null,
+            $data['customer_province'] ?? null,
+            $data['customer_postal_code'] ?? null,
+            $data['customer_country'] ?? 'Philippines',
+        ]);
+
+        $customer = RegulatedCustomer::query()->firstOrNew([
+            'full_name' => trim((string) ($data['patient_name'] ?? '')),
+            'contact_number' => trim((string) ($data['customer_contact_number'] ?? '')),
+            'id_number' => trim((string) ($data['customer_id_number'] ?? '')),
+        ]);
+
+        $customer->fill([
+            'address_line' => trim((string) ($data['customer_address_line'] ?? '')) ?: null,
+            'barangay' => trim((string) ($data['customer_barangay'] ?? '')) ?: null,
+            'city_municipality' => trim((string) ($data['customer_city_municipality'] ?? '')) ?: null,
+            'province' => trim((string) ($data['customer_province'] ?? '')) ?: null,
+            'postal_code' => trim((string) ($data['customer_postal_code'] ?? '')) ?: null,
+            'country' => trim((string) ($data['customer_country'] ?? 'Philippines')) ?: 'Philippines',
+            'formatted_address' => $formattedAddress,
+            'last_purchase_at' => now(),
+        ]);
+        $customer->save();
+
+        return $customer;
+    }
+
+    private function formatUnifiedAddress(array $parts): ?string
+    {
+        $filtered = collect($parts)
+            ->map(fn ($part) => trim((string) $part))
+            ->filter()
+            ->values()
+            ->all();
+
+        if (empty($filtered)) {
+            return null;
+        }
+
+        return implode(', ', $filtered);
     }
 }

@@ -47,7 +47,6 @@ class MedicineController extends Controller
                 'medicines.unit',
                 'medicines.type',
                 'medicines.is_dangerous',
-                'medicines.is_yakap_eligible',
                 'medicines.needs_protection',
                 'batches.batch_id',
                 'batches.expiry_date',
@@ -59,7 +58,6 @@ class MedicineController extends Controller
                 'inventories.updated_at',
             ])
          ->where('branches.status', 'active')
-        ->where('medicines.stocks', '>', 0)
         ->where('batches.expiry_date', '>', now())
         ->orderBy('medicines.medicine_name')
         ->orderBy('batches.expiry_date', 'asc')
@@ -196,7 +194,6 @@ class MedicineController extends Controller
                 'unit' => $data['unit'],
                 'type' => $data['type'],
                 'is_dangerous' => (bool) $data['is_dangerous'],
-                'is_yakap_eligible' => (bool) $data['is_yakap_eligible'],
                 'needs_protection' => (bool) $data['needs_protection'],
             ]);
 
@@ -262,7 +259,6 @@ class MedicineController extends Controller
                 'type' => $data['type'],
                 'needs_protection' => filter_var($data['needs_protection'], FILTER_VALIDATE_BOOLEAN),
                 'is_dangerous' => filter_var($data['is_dangerous'], FILTER_VALIDATE_BOOLEAN),
-                'is_yakap_eligible' => filter_var($data['is_yakap_eligible'], FILTER_VALIDATE_BOOLEAN),
             ]);
 
             $inventory = Inventory::where('medicine_id', $medicine->medicine_id)->firstOrFail();
@@ -474,7 +470,6 @@ class MedicineController extends Controller
             $this->normalizeMergeValue($medicine->type),
             $this->normalizeMergeValue($medicine->reorder_level),
             (int) $medicine->is_dangerous,
-            (int) $medicine->is_yakap_eligible,
             (int) $medicine->needs_protection,
         ]);
     }

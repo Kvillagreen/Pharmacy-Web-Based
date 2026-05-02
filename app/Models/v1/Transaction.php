@@ -34,6 +34,17 @@ class Transaction extends Model
         'prescription_path',
         'member_id_image_path',
         'documents_submitted',
+        'regulated_customer_id',
+        'customer_contact_number',
+        'customer_id_number',
+        'customer_address_line',
+        'customer_barangay',
+        'customer_city_municipality',
+        'customer_province',
+        'customer_postal_code',
+        'customer_country',
+        'customer_formatted_address',
+        'regulated_classification',
     ];
 
     protected $appends = [
@@ -68,13 +79,18 @@ class Transaction extends Model
         return $this->belongsTo(Branch::class, 'branch_id', 'branch_id');
     }
 
+    public function regulatedCustomer()
+    {
+        return $this->belongsTo(RegulatedCustomer::class, 'regulated_customer_id', 'regulated_customer_id');
+    }
+
     public function getPrescriptionUrlAttribute(): ?string
     {
         if (!$this->prescription_path) {
             return null;
         }
 
-        return Storage::disk('public')->url($this->prescription_path);
+        return Storage::disk(config('transactions.documents_disk', 'public'))->url($this->prescription_path);
     }
 
     public function getMemberIdImageUrlAttribute(): ?string
@@ -83,6 +99,6 @@ class Transaction extends Model
             return null;
         }
 
-        return Storage::disk('public')->url($this->member_id_image_path);
+        return Storage::disk(config('transactions.documents_disk', 'public'))->url($this->member_id_image_path);
     }
 }

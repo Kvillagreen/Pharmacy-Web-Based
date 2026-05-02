@@ -13,6 +13,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\v1\UserController;
 use App\Http\Controllers\v1\PermissionController;
+use App\Http\Controllers\v1\PasswordResetController;
 use App\Http\Controllers\v1\AuthController;
 use App\Http\Controllers\v1\CompanyController;
 use App\Http\Controllers\v1\InventoryTransferController;
@@ -21,6 +22,9 @@ use App\Http\Controllers\v1\SuperAdminAuthController;
 Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], function() {
     Route::post('/login', [AuthController::class, 'login']);
     Route::post('/register', [AuthController::class, 'register']);
+    Route::post('/forgot-password/request', [PasswordResetController::class, 'request']);
+    Route::post('/forgot-password/resend', [PasswordResetController::class, 'resend']);
+    Route::post('/forgot-password/reset', [PasswordResetController::class, 'reset']);
     Route::post('/branch-public', [BranchController::class,'branch']);
     Route::post('/admin/login', [SuperAdminAuthController::class, 'login']);
 
@@ -33,6 +37,7 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
         Route::get('/reports', [ReportController::class, 'index']);
         Route::get('/reports/bir-annual', [ReportController::class, 'birAnnualDeclaration']);
         Route::get('/sms/replies', [SmsController::class, 'replies']);
+        Route::get('/sms/logs', [SmsController::class, 'logs']);
         Route::get('/user/permissions/options', [UserController::class, 'permissionOptions']);
         Route::get('/user/{id}/permissions', [UserController::class, 'userPermissions']);
         Route::get('/branch', [BranchController::class, 'index']);
