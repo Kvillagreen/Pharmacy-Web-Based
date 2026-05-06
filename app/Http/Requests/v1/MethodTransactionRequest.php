@@ -30,7 +30,7 @@ class MethodTransactionRequest extends FormRequest
             'user_id' => ['required', 'integer', 'exists:users,user_id'],
             'branch_id' => ['required', 'integer', 'exists:branches,branch_id'],
 
-            'transaction_type' => ['required', Rule::in(['regular'])],
+            'transaction_type' => ['required', Rule::in(['regular', 'controlled', 'dangerous', 'mixed'])],
             'total_amount' => ['required', 'numeric', 'min:0'],
             'sub_total' => ['required', 'numeric', 'min:0'],
             'change' => ['required', 'numeric', 'min:0'],
@@ -50,6 +50,16 @@ class MethodTransactionRequest extends FormRequest
             'documents_submitted' => ['nullable', 'boolean'],
             'prescription' => ['nullable', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:5120'],
             'member_id_image' => ['nullable', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:5120'],
+            'patient_age' => ['nullable', 'integer', 'min:0', 'max:150'],
+            'prescriber_name' => ['nullable', 'string', 'max:150'],
+            'prescriber_prc_license_number' => ['nullable', 'string', 'max:100'],
+            'prescribed_generic_name' => ['nullable', 'string', 'max:150'],
+            'prescribed_brand_name' => ['nullable', 'string', 'max:150'],
+            'prescribed_dosage_strength' => ['nullable', 'string', 'max:100'],
+            'prescribed_dosage_form' => ['nullable', 'string', 'max:100'],
+            'prescribed_quantity_dispensed' => ['nullable', 'integer', 'min:1'],
+            'dispensing_date' => ['nullable', 'date'],
+            'pharmacist_signature' => ['nullable', 'string', 'max:150'],
             'customer_contact_number' => ['nullable', 'string', 'max:30'],
             'customer_id_number' => ['nullable', 'string', 'max:120'],
             'customer_address_line' => ['nullable', 'string', 'max:255'],
@@ -58,6 +68,16 @@ class MethodTransactionRequest extends FormRequest
             'customer_province' => ['nullable', 'string', 'max:120'],
             'customer_postal_code' => ['nullable', 'string', 'max:20'],
             'customer_country' => ['nullable', 'string', 'max:80'],
+            'prescriber_clinic_address' => ['nullable', 'string', 'max:255'],
+            'prescriber_s2_license_number' => ['nullable', 'string', 'max:100'],
+            'prescriber_ptr_number' => ['nullable', 'string', 'max:100'],
+            'yellow_prescription_serial_number' => ['nullable', 'string', 'max:100'],
+            'dangerous_quantity_in_words' => ['nullable', 'string', 'max:150'],
+            'dangerous_quantity_in_figures' => ['nullable', 'string', 'max:100'],
+            'dangerous_total_dosage' => ['nullable', 'string', 'max:150'],
+            'dangerous_treatment_duration' => ['nullable', 'string', 'max:150'],
+            'receiver_name' => ['nullable', 'string', 'max:150'],
+            'receiver_signature' => ['nullable', 'string', 'max:150'],
             'request_token' => ['nullable', 'string', 'max:100'],
 
             'items' => ['required', 'array', 'min:1'],
@@ -82,52 +102,100 @@ class MethodTransactionRequest extends FormRequest
     public function withValidator($validator): void
     {
         $validator->after(function ($validator) {
-            if (!$this->hasRegulatedMedicineInPayload()) {
+            $requirements = $this->regulatedRequirementsInPayload();
+            if (!$requirements['has_controlled'] && !$requirements['has_dangerous']) {
                 return;
             }
 
-            $requiredFields = [
-                'patient_name' => 'Customer name is required for controlled or dangerous medicine purchases.',
-                'customer_contact_number' => 'Customer contact number is required for controlled or dangerous medicine purchases.',
-                'customer_address_line' => 'Address line is required for controlled or dangerous medicine purchases.',
-                'customer_barangay' => 'Barangay is required for controlled or dangerous medicine purchases.',
-                'customer_city_municipality' => 'City / Municipality is required for controlled or dangerous medicine purchases.',
-                'customer_province' => 'Province is required for controlled or dangerous medicine purchases.',
-                'customer_country' => 'Country is required for controlled or dangerous medicine purchases.',
+            $sharedFields = [
+                'patient_name' => 'Patient full name is required for prescribed or dangerous drug transactions.',
+                'customer_address_line' => 'Patient address is required for prescribed or dangerous drug transactions.',
             ];
 
-            foreach ($requiredFields as $field => $message) {
+            foreach ($sharedFields as $field => $message) {
                 if (!filled($this->input($field))) {
                     $validator->errors()->add($field, $message);
                 }
             }
 
-            if (!$this->hasFile('prescription')) {
-                $validator->errors()->add('prescription', 'Prescription document is required for controlled or dangerous medicine purchases.');
+            if ($requirements['has_controlled']) {
+                $controlledFields = [
+                    'patient_age' => 'Patient age is required for prescribed drug transactions.',
+                    'prescriber_name' => 'Prescriber full name is required for prescribed drug transactions.',
+                    'prescriber_prc_license_number' => 'PRC license number is required for prescribed drug transactions.',
+                    'prescribed_generic_name' => 'Generic name is required for prescribed drug transactions.',
+                    'prescribed_dosage_strength' => 'Dosage strength is required for prescribed drug transactions.',
+                    'prescribed_dosage_form' => 'Dosage form is required for prescribed drug transactions.',
+                    'prescribed_quantity_dispensed' => 'Quantity dispensed is required for prescribed drug transactions.',
+                    'dispensing_date' => 'Dispensing date is required for prescribed drug transactions.',
+                    'pharmacist_signature' => 'Pharmacist initials or signature is required for prescribed drug transactions.',
+                ];
+
+                foreach ($controlledFields as $field => $message) {
+                    if (!filled($this->input($field))) {
+                        $validator->errors()->add($field, $message);
+                    }
+                }
             }
 
-            if (!$this->hasFile('member_id_image')) {
-                $validator->errors()->add('member_id_image', 'Valid ID document is required for controlled or dangerous medicine purchases.');
+            if ($requirements['has_dangerous']) {
+                $dangerousFields = [
+                    'prescriber_name' => 'Physician full name is required for dangerous drug transactions.',
+                    'prescriber_clinic_address' => 'Clinic address is required for dangerous drug transactions.',
+                    'prescriber_s2_license_number' => 'S-2 license number is required for dangerous drug transactions.',
+                    'prescriber_ptr_number' => 'PTR number is required for dangerous drug transactions.',
+                    'yellow_prescription_serial_number' => 'Yellow prescription serial number is required for dangerous drug transactions.',
+                    'dangerous_quantity_in_words' => 'Exact quantity in words is required for dangerous drug transactions.',
+                    'dangerous_quantity_in_figures' => 'Exact quantity in figures is required for dangerous drug transactions.',
+                    'dangerous_total_dosage' => 'Total dosage is required for dangerous drug transactions.',
+                    'dangerous_treatment_duration' => 'Treatment duration is required for dangerous drug transactions.',
+                    'receiver_signature' => 'Receiver signature is required for dangerous drug transactions.',
+                ];
+
+                foreach ($dangerousFields as $field => $message) {
+                    if (!filled($this->input($field))) {
+                        $validator->errors()->add($field, $message);
+                    }
+                }
+
+                if (!filled($this->input('customer_contact_number')) && !filled($this->input('customer_id_number'))) {
+                    $validator->errors()->add('customer_contact_number', 'Provide either a patient contact number or a valid ID number for dangerous drug transactions.');
+                }
+
+                if (!filled($this->input('receiver_name'))) {
+                    $validator->errors()->add('receiver_name', 'Receiver name is required for dangerous drug transactions.');
+                }
             }
         });
     }
 
-    private function hasRegulatedMedicineInPayload(): bool
+    private function regulatedRequirementsInPayload(): array
     {
         $items = collect($this->input('items', []));
         $medicineIds = $items->pluck('medicine_id')->filter()->map(fn ($id) => (int) $id)->unique()->values();
 
         if ($medicineIds->isEmpty()) {
-            return false;
+            return [
+                'has_controlled' => false,
+                'has_dangerous' => false,
+                'classification' => null,
+            ];
         }
 
-        return Medicine::query()
+        $medicines = Medicine::query()
             ->whereIn('medicine_id', $medicineIds)
-            ->where(function ($query) {
-                $query->where('is_dangerous', true)
-                    ->orWhere('needs_protection', true);
-            })
-            ->exists();
+            ->get(['medicine_id', 'is_dangerous', 'needs_protection']);
+
+        $hasDangerous = $medicines->contains(fn ($medicine) => (bool) $medicine->is_dangerous);
+        $hasControlled = $medicines->contains(fn ($medicine) => (bool) $medicine->needs_protection);
+
+        return [
+            'has_controlled' => $hasControlled,
+            'has_dangerous' => $hasDangerous,
+            'classification' => $hasDangerous && $hasControlled
+                ? 'mixed'
+                : ($hasDangerous ? 'dangerous' : ($hasControlled ? 'controlled' : null)),
+        ];
     }
 
 protected function failedValidation(Validator $validator)

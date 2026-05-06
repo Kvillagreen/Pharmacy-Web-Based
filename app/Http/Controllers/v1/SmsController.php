@@ -126,7 +126,7 @@ class SmsController extends Controller
 
         $validated = $request->validate([
             'to_number' => ['required', 'string', 'max:30'],
-            'message_body' => ['required', 'string', 'max:150'],
+            'message_body' => ['required', 'string', 'max:161'],
             'sender_name' => ['nullable', 'string', 'max:100'],
             'template_tag' => ['nullable', 'string', 'max:120'],
         ]);
@@ -201,6 +201,48 @@ class SmsController extends Controller
             return $this->response(false, 'Unable to load SMS logs.', [
                 'logs' => [],
             ], 500);
+        }
+    }
+
+    public function destroyMessage(int $messageId)
+    {
+        try {
+            $deleted = $this->smsService->deleteStoredMessage($messageId);
+
+            if (!$deleted) {
+                return $this->response(false, 'SMS message not found.', null, 404);
+            }
+
+            return $this->response(true, 'SMS message deleted successfully.');
+        } catch (\Throwable $e) {
+            \Log::error('Failed to delete SMS message.', [
+                'message_id' => $messageId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return $this->response(false, 'Unable to delete SMS message.', null, 500);
+        }
+    }
+
+    public function destroyConversation(string $counterpartyNumber)
+    {
+        try {
+            $deletedCount = $this->smsService->deleteConversation($counterpartyNumber);
+
+            if ($deletedCount <= 0) {
+                return $this->response(false, 'Conversation not found.', null, 404);
+            }
+
+            return $this->response(true, 'Conversation deleted successfully.', [
+                'deleted_count' => $deletedCount,
+            ]);
+        } catch (\Throwable $e) {
+            \Log::error('Failed to delete SMS conversation.', [
+                'counterparty_number' => $counterpartyNumber,
+                'error' => $e->getMessage(),
+            ]);
+
+            return $this->response(false, 'Unable to delete conversation.', null, 500);
         }
     }
 }

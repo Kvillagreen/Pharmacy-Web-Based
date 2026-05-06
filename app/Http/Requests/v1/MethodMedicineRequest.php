@@ -18,6 +18,8 @@ class MethodMedicineRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'inventory_id' => ['nullable', 'integer', 'exists:inventories,inventory_id'],
+            'batch_id' => ['nullable', 'integer', 'exists:batches,batch_id'],
             'medicine_name' => ['required', 'string'],
             'generic_name' => ['required', 'string'],
             'price' => ['required', 'numeric', 'min:1'], // price must be at least 1

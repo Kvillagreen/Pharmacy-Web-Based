@@ -70,6 +70,8 @@ class ReportController extends Controller
                         'top_medicines' => [],
                         'inventory_watch' => [],
                         'recent_transactions' => [],
+                        'prescribed_transactions' => [],
+                        'dangerous_transactions' => [],
                     ],
                     'analysis' => [
                         'headline' => 'No report data is available for the selected scope yet.',
@@ -79,7 +81,11 @@ class ReportController extends Controller
             ]);
         }
 
-        $transactionSummary = Transaction::query()
+        $normalTransactions = Transaction::query()
+            ->whereIn('branch_id', $scopeBranchIds)
+            ->whereNull('regulated_classification');
+
+        $transactionSummary = (clone $normalTransactions)
             ->whereIn('branch_id', $scopeBranchIds)
             ->whereBetween('created_at', [$previousStart, $rangeEnd])
             ->selectRaw(
@@ -125,9 +131,8 @@ class ReportController extends Controller
 
         $expiring30Count = (int) ($batchSummary->expiring_30_count ?? 0);
 
-        $dailyRevenueRaw = Transaction::query()
+        $dailyRevenueRaw = (clone $normalTransactions)
             ->selectRaw('DATE(created_at) as sale_date, SUM(total_amount) as total_revenue, COUNT(*) as transaction_count')
-            ->whereIn('branch_id', $scopeBranchIds)
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->groupBy(DB::raw('DATE(created_at)'))
             ->orderBy('sale_date')
@@ -146,9 +151,8 @@ class ReportController extends Controller
             ];
         })->values();
 
-        $paymentMix = Transaction::query()
+        $paymentMix = (clone $normalTransactions)
             ->selectRaw('payment_method, SUM(total_amount) as total_revenue, COUNT(*) as transaction_count')
-            ->whereIn('branch_id', $scopeBranchIds)
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->groupBy('payment_method')
             ->orderByDesc('total_revenue')
@@ -165,6 +169,7 @@ class ReportController extends Controller
             ->join('medicines', 'transaction_items.medicine_id', '=', 'medicines.medicine_id')
             ->selectRaw('medicines.category, SUM(transaction_items.quantity) as quantity_sold, COUNT(DISTINCT transactions.transaction_id) as transaction_count')
             ->whereIn('transactions.branch_id', $scopeBranchIds)
+            ->whereNull('transactions.regulated_classification')
             ->whereBetween('transactions.created_at', [$rangeStart, $rangeEnd])
             ->groupBy('medicines.category')
             ->orderByDesc('quantity_sold')
@@ -180,6 +185,7 @@ class ReportController extends Controller
         $branchPerformance = Branch::query()
             ->leftJoin('transactions', function ($join) use ($rangeStart, $rangeEnd) {
                 $join->on('branches.branch_id', '=', 'transactions.branch_id')
+                    ->whereNull('transactions.regulated_classification')
                     ->whereBetween('transactions.created_at', [$rangeStart, $rangeEnd]);
             })
             ->where('branches.status', 'active')
@@ -201,6 +207,7 @@ class ReportController extends Controller
             ->join('medicines', 'transaction_items.medicine_id', '=', 'medicines.medicine_id')
             ->selectRaw('medicines.medicine_id, medicines.medicine_name, medicines.generic_name, medicines.category, SUM(transaction_items.quantity) as quantity_sold, COUNT(DISTINCT transactions.transaction_id) as transactions_count')
             ->whereIn('transactions.branch_id', $scopeBranchIds)
+            ->whereNull('transactions.regulated_classification')
             ->whereBetween('transactions.created_at', [$rangeStart, $rangeEnd])
             ->groupBy('medicines.medicine_id', 'medicines.medicine_name', 'medicines.generic_name', 'medicines.category')
             ->orderByDesc('quantity_sold')
@@ -259,9 +266,8 @@ class ReportController extends Controller
             })
             ->values();
 
-        $recentTransactions = Transaction::query()
+        $recentTransactions = (clone $normalTransactions)
             ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name'])
-            ->whereIn('branch_id', $scopeBranchIds)
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->latest('created_at')
             ->limit(10)
@@ -275,6 +281,28 @@ class ReportController extends Controller
                 'discount' => (float) ($transaction->discount ?? 0),
                 'created_at' => $transaction->created_at,
             ])
+            ->values();
+
+        $prescribedTransactions = Transaction::query()
+            ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name'])
+            ->whereIn('branch_id', $scopeBranchIds)
+            ->whereIn('regulated_classification', ['controlled', 'mixed'])
+            ->whereBetween('created_at', [$rangeStart, $rangeEnd])
+            ->latest('created_at')
+            ->limit(10)
+            ->get()
+            ->map(fn ($transaction) => $this->mapRegulatedTransaction($transaction))
+            ->values();
+
+        $dangerousTransactions = Transaction::query()
+            ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name'])
+            ->whereIn('branch_id', $scopeBranchIds)
+            ->whereIn('regulated_classification', ['dangerous', 'mixed'])
+            ->whereBetween('created_at', [$rangeStart, $rangeEnd])
+            ->latest('created_at')
+            ->limit(10)
+            ->get()
+            ->map(fn ($transaction) => $this->mapRegulatedTransaction($transaction))
             ->values();
 
         $analysis = $this->buildAnalysis([
@@ -317,6 +345,8 @@ class ReportController extends Controller
                     'top_medicines' => $topMedicines,
                     'inventory_watch' => $inventoryWatch,
                     'recent_transactions' => $recentTransactions,
+                    'prescribed_transactions' => $prescribedTransactions,
+                    'dangerous_transactions' => $dangerousTransactions,
                 ],
                 'analysis' => $analysis,
             ],
@@ -461,6 +491,22 @@ class ReportController extends Controller
         return [
             'headline' => $headline,
             'highlights' => array_values(array_unique($highlights)),
+        ];
+    }
+
+    private function mapRegulatedTransaction(Transaction $transaction): array
+    {
+        return [
+            'transaction_id' => $transaction->transaction_id,
+            'regulated_classification' => $transaction->regulated_classification,
+            'branch_name' => $transaction->branch?->branch_name,
+            'cashier_name' => trim(($transaction->user?->first_name ?? '') . ' ' . ($transaction->user?->last_name ?? '')),
+            'payment_method' => $transaction->payment_method,
+            'total_amount' => (float) $transaction->total_amount,
+            'discount' => (float) ($transaction->discount ?? 0),
+            'patient_name' => $transaction->patient_name,
+            'created_at' => $transaction->created_at,
+            'regulated_details' => $transaction->regulated_details,
         ];
     }
 }

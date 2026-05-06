@@ -30,10 +30,12 @@ class SmsMessage extends Model
         'message_body',
         'provider_received_at',
         'provider_payload',
+        'is_deleted',
     ];
 
     protected $casts = [
         'provider_received_at' => 'datetime',
         'provider_payload' => 'array',
+        'is_deleted' => 'boolean',
     ];
 }

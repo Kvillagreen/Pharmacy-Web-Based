@@ -17,6 +17,101 @@ use Illuminate\Support\Facades\DB;
 
 class MedicineController extends Controller
 {
+    public function publicCatalog(Request $request)
+    {
+        $perPage = max(6, min((int) $request->input('per_page', 12), 24));
+        $branchId = (int) $request->input('branch_id', 0);
+        $search = trim((string) $request->input('search', ''));
+        $stockFilter = strtolower(trim((string) $request->input('stock_filter', 'all')));
+        $sort = strtolower(trim((string) $request->input('sort', 'name')));
+
+        $query = Medicine::query()
+            ->join('inventories', 'medicines.medicine_id', '=', 'inventories.medicine_id')
+            ->leftJoin('batches', 'inventories.batch_id', '=', 'batches.batch_id')
+            ->join('branches', 'inventories.branch_id', '=', 'branches.branch_id')
+            ->leftJoin('companies', 'branches.company_id', '=', 'companies.company_id')
+            ->select([
+                'inventories.inventory_id',
+                'inventories.branch_id',
+                'companies.company_name',
+                'branches.branch_name',
+                'branches.branch_address',
+                'branches.branch_contact',
+                'medicines.medicine_id',
+                'medicines.medicine_name',
+                'medicines.generic_name',
+                'medicines.category',
+                'medicines.type',
+                'medicines.dosage',
+                'medicines.unit',
+                'medicines.price',
+                'medicines.reorder_level',
+                'medicines.is_dangerous',
+                'medicines.needs_protection',
+                'inventories.stocks',
+                'batches.expiry_date',
+                'batches.received_date',
+            ])
+            ->where('branches.status', 'active')
+            ->where(function ($query) {
+                $query->whereNull('batches.expiry_date')
+                    ->orWhereDate('batches.expiry_date', '>', now()->toDateString());
+            });
+
+        if ($branchId > 0) {
+            $query->where('branches.branch_id', $branchId);
+        }
+
+        if ($search !== '') {
+            $query->where(function ($innerQuery) use ($search) {
+                $innerQuery
+                    ->where('medicines.medicine_name', 'like', '%' . $search . '%')
+                    ->orWhere('medicines.generic_name', 'like', '%' . $search . '%')
+                    ->orWhere('medicines.category', 'like', '%' . $search . '%')
+                    ->orWhere('medicines.type', 'like', '%' . $search . '%')
+                    ->orWhere('branches.branch_name', 'like', '%' . $search . '%');
+            });
+        }
+
+        if ($stockFilter === 'in-stock') {
+            $query->where('inventories.stocks', '>', 0);
+        } elseif ($stockFilter === 'low-stock') {
+            $query->whereColumn('inventories.stocks', '<=', 'medicines.reorder_level')
+                ->where('inventories.stocks', '>', 0);
+        } elseif ($stockFilter === 'out-of-stock') {
+            $query->where('inventories.stocks', '<=', 0);
+        }
+
+        if ($sort === 'stocks') {
+            $query->orderByDesc('inventories.stocks')->orderBy('medicines.medicine_name');
+        } elseif ($sort === 'price') {
+            $query->orderBy('medicines.price')->orderBy('medicines.medicine_name');
+        } elseif ($sort === 'branch') {
+            $query->orderBy('branches.branch_name')->orderBy('medicines.medicine_name');
+        } else {
+            $query->orderBy('medicines.medicine_name')->orderBy('branches.branch_name');
+        }
+
+        $catalog = $query->paginate($perPage);
+
+        return response()->json([
+            'success' => true,
+            'data' => $catalog->items(),
+            'meta' => [
+                'current_page' => $catalog->currentPage(),
+                'last_page' => $catalog->lastPage(),
+                'per_page' => $catalog->perPage(),
+                'total' => $catalog->total(),
+            ],
+            'filters' => [
+                'branch_id' => $branchId,
+                'search' => $search,
+                'stock_filter' => $stockFilter,
+                'sort' => $sort,
+            ],
+        ]);
+    }
+
     public function index(Request $request)
     {
         $site = strtolower($request->header('X-Page-Context', ''));
@@ -248,6 +343,15 @@ class MedicineController extends Controller
             $data = $request->validated();
 
             $medicine = Medicine::where('medicine_id', $id)->firstOrFail();
+            $inventoryId = (int) ($data['inventory_id'] ?? $request->input('inventory_id', 0));
+
+            if ($inventoryId <= 0) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Inventory record is required for this update.',
+                ], 422);
+            }
+
             $medicine->update([
                 'medicine_name' => $data['medicine_name'],
                 'generic_name' => $data['generic_name'],
@@ -261,13 +365,17 @@ class MedicineController extends Controller
                 'is_dangerous' => filter_var($data['is_dangerous'], FILTER_VALIDATE_BOOLEAN),
             ]);
 
-            $inventory = Inventory::where('medicine_id', $medicine->medicine_id)->firstOrFail();
+            $inventory = Inventory::query()
+                ->where('inventory_id', $inventoryId)
+                ->where('medicine_id', $medicine->medicine_id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
             $inventory->update([
-                'branch_id' => $data['branch_id'],
                 'stocks' => $data['stocks'],
             ]);
 
-            $batch = Batch::where('batch_id', $inventory->batch_id)->firstOrFail();
+            $batch = Batch::where('batch_id', $inventory->batch_id)->lockForUpdate()->firstOrFail();
             $batch->update([
                 'expiry_date' => $data['expiry_date'],
                 'received_date' => $data['received_date'],

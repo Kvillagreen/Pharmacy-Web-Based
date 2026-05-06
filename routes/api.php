@@ -26,6 +26,7 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
     Route::post('/forgot-password/resend', [PasswordResetController::class, 'resend']);
     Route::post('/forgot-password/reset', [PasswordResetController::class, 'reset']);
     Route::post('/branch-public', [BranchController::class,'branch']);
+    Route::get('/catalog', [MedicineController::class, 'publicCatalog']);
     Route::post('/admin/login', [SuperAdminAuthController::class, 'login']);
 
     // Protected routes
@@ -69,6 +70,8 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
         Route::post('/change-password', [AuthController::class, 'changePassword']);
         Route::post('/medicine/merge-duplicates', [MedicineController::class, 'mergeDuplicates']);
         Route::post('/sms/messages', [SmsController::class, 'send']);
+        Route::delete('/sms/messages/{messageId}', [SmsController::class, 'destroyMessage']);
+        Route::delete('/sms/conversations/{counterpartyNumber}', [SmsController::class, 'destroyConversation']);
         Route::apiResource('/medicine', MedicineController::class)->except(['index', 'show']);
         Route::apiResource('/fefo', FefoController::class)->except(['index', 'show']);
         Route::apiResource('/transaction', TransactionController::class)->except(['index', 'show']);
@@ -134,5 +137,3 @@ return response()->json([
     });
 
 });
-
-require __DIR__.'/mobile.php';

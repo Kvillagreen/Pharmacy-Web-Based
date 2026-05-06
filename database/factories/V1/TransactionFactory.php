@@ -3,11 +3,9 @@
 namespace Database\Factories\v1;
 
 use App\Models\v1\Transaction;
-use App\Models\v1\TransactionType;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
 /**
- * @extends Factory<TransactionType>
  * @extends Factory<Transaction>
  */
 class TransactionFactory extends Factory
@@ -20,7 +18,7 @@ class TransactionFactory extends Factory
     public function definition(): array
     {
           return [
-            'transaction_type_id' => TransactionType::factory(),
+            'transaction_type' => 'regular',
             'user_id' => $this->faker->numberBetween(1,10),
             'branch_id' => $this->faker->numberBetween(1,10),
             'total_amount' => $this->faker->randomFloat(2, 10, 1000),

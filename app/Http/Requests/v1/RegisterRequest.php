@@ -23,7 +23,7 @@ class RegisterRequest extends FormRequest
             'password' => ['required', 'string', 'min:8'],
             'branchId' => ['required', 'exists:branches,branch_id'],
             'role' => ['required', Rule::in(['staff', 'pharmacist', 'owner', 'branch_manager', 'admin'])],
-            'address' => ['required', 'string', 'max:255'],
+            'address' => ['required', 'string', 'max:500'],
         ];
     }
 

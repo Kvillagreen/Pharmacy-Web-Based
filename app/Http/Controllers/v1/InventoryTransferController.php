@@ -84,6 +84,13 @@ class InventoryTransferController extends Controller
             ], 422);
         }
 
+        if ((int) $inventory->stocks <= 2) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Medicines with 2 or fewer stocks cannot be transferred.',
+            ], 422);
+        }
+
         if ((int) $inventory->stocks < (int) $validated['quantity']) {
             return response()->json([
                 'success' => false,

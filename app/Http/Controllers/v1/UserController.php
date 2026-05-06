@@ -14,6 +14,25 @@ use Illuminate\Validation\Rule;
 
 class UserController extends Controller
 {
+    private function defaultRolePermissionNames(string $role): array
+    {
+        return match ($role) {
+            'staff' => ['dashboard', 'sales', 'sms', 'inventory', 'delivery'],
+            'pharmacist' => ['sales', 'sms', 'inventory', 'fefo', 'drugs', 'delivery'],
+            'branch_manager' => ['dashboard', 'inventory', 'fefo', 'delivery', 'reports'],
+            'owner', 'admin', 'super_admin' => ['dashboard', 'sales', 'sms', 'inventory', 'fefo', 'drugs', 'delivery', 'reports', 'users', 'settings', 'branches'],
+            default => ['dashboard'],
+        };
+    }
+
+    private function defaultRolePermissionIds(string $role): array
+    {
+        return Permission::query()
+            ->whereIn('permission_name', $this->defaultRolePermissionNames($role))
+            ->pluck('permission_id')
+            ->toArray();
+    }
+
     private function formatUser(User $user): array
     {
         return [
@@ -209,7 +228,11 @@ class UserController extends Controller
                 'status' => 'approved',
             ]);
 
-            $user->permissions()->sync($validated['permission_ids'] ?? []);
+            $user->permissions()->sync(
+                !empty($validated['permission_ids'])
+                    ? $validated['permission_ids']
+                    : $this->defaultRolePermissionIds($validated['role'])
+            );
 
             $user->load(['branch.company', 'permissions']);
 
@@ -252,9 +275,15 @@ class UserController extends Controller
                 Rule::unique('users', 'email')->ignore($user->user_id, 'user_id')
             ],
             'address' => ['nullable', 'string', 'max:500'],
+            'role' => ['nullable', Rule::in(['staff', 'pharmacist', 'owner', 'branch_manager', 'admin'])],
         ]);
 
+        $originalRole = $user->role;
         $user->update($validated);
+
+        if (!empty($validated['role']) && $validated['role'] !== $originalRole) {
+            $user->permissions()->sync($this->defaultRolePermissionIds($validated['role']));
+        }
 
         $user->load(['branch.company', 'permissions']);
 

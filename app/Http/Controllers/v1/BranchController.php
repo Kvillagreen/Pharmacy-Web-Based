@@ -14,6 +14,8 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 class BranchController extends Controller
 {
+    private const PUBLIC_BRANCH_CACHE_KEY = 'public_branch_list_v2';
+
     /**
      * Display a listing of the resource.
      */
@@ -49,6 +51,7 @@ class BranchController extends Controller
                 'status'         => $validated['status'] ?? 'active', // fallback
             ]);
             Cache::forget('public_branch_list');
+            Cache::forget(self::PUBLIC_BRANCH_CACHE_KEY);
             DB::commit();
 
             return response()->json([
@@ -164,6 +167,7 @@ class BranchController extends Controller
 
         $branch->save();
         Cache::forget('public_branch_list');
+        Cache::forget(self::PUBLIC_BRANCH_CACHE_KEY);
 
         DB::commit();
 
@@ -255,8 +259,31 @@ public function destroy(string $id)
 
     public function branch(){
       try{
-          $branches = Cache::remember('public_branch_list', 0, fn () => Branch::all());
-        return BranchResources::collection($branches);
+          $branches = Cache::remember(
+              self::PUBLIC_BRANCH_CACHE_KEY,
+              300,
+              fn () => Branch::query()
+                  ->where('status', 'active')
+                  ->orderBy('branch_name')
+                  ->get()
+                  ->map(fn (Branch $branch) => [
+                      'branch_id' => (int) $branch->branch_id,
+                      'company_id' => (int) $branch->company_id,
+                      'branch_name' => $branch->branch_name,
+                      'branch_address' => $branch->branch_address,
+                      'branch_contact' => $branch->branch_contact,
+                      'status' => $branch->status,
+                      'branchId' => (int) $branch->branch_id,
+                      'branchName' => $branch->branch_name,
+                  ])
+                  ->values()
+                  ->all()
+          );
+
+        return response()->json([
+            'success' => true,
+            'data' => $branches,
+        ]);
       }
       catch(\Throwable $e){
         Log::error('Branch retrieval failed', [

@@ -26,7 +26,7 @@ class DashboardController extends Controller
         $days = max(7, min((int) $request->input('days', 30), 90));
         $cacheKey = $this->buildCacheKey($companyId, $branchId, $days);
 
-        $payload = Cache::remember($cacheKey, 30, function () use ($companyId, $branchId, $days) {
+        $payload = Cache::remember($cacheKey, 0, function () use ($companyId, $branchId, $days) {
             $today = Carbon::today();
             $rangeStart = $today->copy()->subDays($days - 1)->startOfDay();
             $rangeEnd = $today->copy()->endOfDay();
@@ -41,17 +41,25 @@ class DashboardController extends Controller
                 $baseBranchQuery->where('company_id', $companyId);
             }
 
-            $scopeBranchIds = $baseBranchQuery->pluck('branch_id')->toArray();
-            $comparisonBranchIds = $scopeBranchIds;
+            $companyBranchIds = $baseBranchQuery->pluck('branch_id')->toArray();
+            $scopeBranchIds = $companyBranchIds;
 
             $scopeLabel = 'All Branches';
             if ($branchId > 0) {
-                $selectedBranchName = Branch::query()
+                $selectedBranch = Branch::query()
                     ->where('status', 'active')
                     ->where('branch_id', $branchId)
-                    ->value('branch_name');
+                    ->when($companyId > 0, fn ($query) => $query->where('company_id', $companyId))
+                    ->select(['branch_id', 'branch_name'])
+                    ->first();
 
-                $scopeLabel = $selectedBranchName ?: 'Selected Branch';
+                if ($selectedBranch) {
+                    $scopeBranchIds = [$selectedBranch->branch_id];
+                    $scopeLabel = $selectedBranch->branch_name ?: 'Selected Branch';
+                } else {
+                    $scopeBranchIds = [];
+                    $scopeLabel = 'Selected Branch';
+                }
             }
 
             if (empty($scopeBranchIds)) {
@@ -245,7 +253,7 @@ class DashboardController extends Controller
                     $join->on('branches.branch_id', '=', 'transactions.branch_id')
                         ->whereBetween('transactions.created_at', [$monthStart, $rangeEnd]);
                 })
-                ->whereIn('branches.branch_id', $comparisonBranchIds)
+                ->whereIn('branches.branch_id', $scopeBranchIds)
                 ->selectRaw('branches.branch_id, branches.branch_name, COALESCE(SUM(transactions.total_amount), 0) as total_revenue, COUNT(transactions.transaction_id) as transaction_count')
                 ->groupBy('branches.branch_id', 'branches.branch_name')
                 ->orderByDesc('total_revenue')

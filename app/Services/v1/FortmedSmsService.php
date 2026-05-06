@@ -91,6 +91,8 @@ class FortmedSmsService
             return;
         }
 
+        $supportsDeletedFlag = $this->supportsDeletedSmsLogColumn();
+
         foreach ($messages as $message) {
             if (!is_array($message)) {
                 continue;
@@ -103,11 +105,25 @@ class FortmedSmsService
             $normalizedFrom = $this->normalizePhoneNumber($fromNumber);
             $normalizedTo = $this->normalizePhoneNumber($toNumber);
             $counterpartyNumber = $normalizedFrom !== '' ? $normalizedFrom : $normalizedTo;
-            $existingReferenceNumber = $this->supportsExtendedSmsLogColumns() && $providerMessageId !== ''
+            $decodedMessageBody = $this->decodeStoredMessageText((string) ($message['message_body'] ?? ''));
+            $providerPayload = $this->normalizeProviderPayloadBody($message['raw'] ?? $message);
+            $existingMessage = $providerMessageId !== ''
                 ? SmsMessage::query()
                     ->where('direction', 'inbound')
                     ->where('provider_message_id', $providerMessageId)
-                    ->value('reference_number')
+                    ->first()
+                : null;
+
+            if ($supportsDeletedFlag && $existingMessage?->is_deleted) {
+                continue;
+            }
+
+            $existingReferenceNumber = $this->supportsExtendedSmsLogColumns() && $providerMessageId !== ''
+                ? ($existingMessage?->reference_number
+                    ?? SmsMessage::query()
+                        ->where('direction', 'inbound')
+                        ->where('provider_message_id', $providerMessageId)
+                        ->value('reference_number'))
                 : null;
 
             $attributes = [
@@ -120,10 +136,14 @@ class FortmedSmsService
                 'normalized_from_number' => $normalizedFrom !== '' ? $normalizedFrom : null,
                 'normalized_to_number' => $normalizedTo !== '' ? $normalizedTo : null,
                 'counterparty_number' => $counterpartyNumber !== '' ? $counterpartyNumber : null,
-                'message_body' => (string) ($message['message_body'] ?? ''),
+                'message_body' => $decodedMessageBody,
                 'provider_received_at' => $this->parseProviderTimestamp($message['received_at'] ?? null),
-                'provider_payload' => $message['raw'] ?? $message,
+                'provider_payload' => $providerPayload,
             ];
+
+            if ($supportsDeletedFlag) {
+                $attributes['is_deleted'] = false;
+            }
 
             if ($this->supportsExtendedSmsLogColumns()) {
                 $attributes['reference_number'] = $existingReferenceNumber ?: $this->generateReferenceNumber('IN');
@@ -171,6 +191,10 @@ class FortmedSmsService
             'provider_payload' => is_array($providerResponse) ? $providerResponse : ['response' => $providerResponse],
         ];
 
+        if ($this->supportsDeletedSmsLogColumn()) {
+            $attributes['is_deleted'] = false;
+        }
+
         if ($this->supportsExtendedSmsLogColumns()) {
             $attributes['reference_number'] = (string) ($metadata['reference_number'] ?? $this->generateReferenceNumber('OUT'));
             $attributes['template_tag'] = $this->normalizeTemplateTag($metadata['template_tag'] ?? null);
@@ -189,10 +213,17 @@ class FortmedSmsService
             ];
         }
 
-        $messages = SmsMessage::query()
+        $this->repairUnreadableStoredMessages();
+
+        $query = SmsMessage::query()
             ->orderByDesc('provider_received_at')
-            ->orderByDesc('sms_message_id')
-            ->get();
+            ->orderByDesc('sms_message_id');
+
+        if ($this->supportsDeletedSmsLogColumn()) {
+            $query->where('is_deleted', false);
+        }
+
+        $messages = $query->get();
 
         $grouped = $messages
             ->groupBy(fn (SmsMessage $message) => $message->counterparty_number ?: 'unknown')
@@ -215,11 +246,18 @@ class FortmedSmsService
             return [];
         }
 
-        $messages = SmsMessage::query()
+        $this->repairUnreadableStoredMessages();
+
+        $query = SmsMessage::query()
             ->orderByDesc('provider_received_at')
             ->orderByDesc('sms_message_id')
-            ->take(max(1, min($limit, 250)))
-            ->get();
+            ->take(max(1, min($limit, 250)));
+
+        if ($this->supportsDeletedSmsLogColumn()) {
+            $query->where('is_deleted', false);
+        }
+
+        $messages = $query->get();
 
         return $messages->map(fn (SmsMessage $message) => [
             'id' => $message->sms_message_id,
@@ -235,6 +273,41 @@ class FortmedSmsService
             'message_body' => $message->message_body,
             'received_at' => optional($message->provider_received_at)->toDateTimeString(),
         ])->values()->all();
+    }
+
+    public function deleteStoredMessage(int $messageId): bool
+    {
+        if (!$this->smsMessageTableExists()) {
+            return false;
+        }
+
+        $query = SmsMessage::query()->where('sms_message_id', $messageId);
+
+        if (!$this->supportsDeletedSmsLogColumn()) {
+            return $query->delete() > 0;
+        }
+
+        return $query->update(['is_deleted' => true]) > 0;
+    }
+
+    public function deleteConversation(?string $counterpartyNumber): int
+    {
+        if (!$this->smsMessageTableExists()) {
+            return 0;
+        }
+
+        $normalized = $this->normalizePhoneNumber($counterpartyNumber);
+        if ($normalized === '') {
+            return 0;
+        }
+
+        $query = SmsMessage::query()->where('counterparty_number', $normalized);
+
+        if (!$this->supportsDeletedSmsLogColumn()) {
+            return $query->delete();
+        }
+
+        return $query->update(['is_deleted' => true]);
     }
 
     private function request()
@@ -380,6 +453,7 @@ class FortmedSmsService
                 $receivedAt = $record['ReceivedAt'] ?? $record['received_at'] ?? $record['created_at'] ?? $record['date'] ?? null;
                 $normalizedFrom = $this->normalizePhoneNumber((string) $fromNumber);
                 $normalizedTo = $this->normalizePhoneNumber((string) $toNumber);
+                $decodedMessageBody = $this->decodeStoredMessageText((string) $messageBody);
 
                 return [
                     'id' => $record['ReplyID'] ?? $record['reply_id'] ?? $record['id'] ?? md5(json_encode($record)),
@@ -389,10 +463,10 @@ class FortmedSmsService
                     'display_to_number' => $this->formatDisplayPhoneNumber((string) $toNumber),
                     'normalized_from_number' => $normalizedFrom,
                     'normalized_to_number' => $normalizedTo,
-                    'message_body' => (string) $messageBody,
+                    'message_body' => $decodedMessageBody,
                     'sender_name' => (string) ($record['SenderName'] ?? $record['sender_name'] ?? ''),
                     'received_at' => $receivedAt,
-                    'raw' => $record,
+                    'raw' => $this->normalizeProviderPayloadBody($record),
                 ];
             })
             ->values()
@@ -522,5 +596,101 @@ class FortmedSmsService
         } catch (\Throwable) {
             return false;
         }
+    }
+
+    private function supportsDeletedSmsLogColumn(): bool
+    {
+        try {
+            return Schema::hasColumn('sms_messages', 'is_deleted');
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private function repairUnreadableStoredMessages(): void
+    {
+        $query = SmsMessage::query()
+            ->where('direction', 'inbound')
+            ->orderBy('sms_message_id');
+
+        if ($this->supportsDeletedSmsLogColumn()) {
+            $query->where('is_deleted', false);
+        }
+
+        $query->chunkById(100, function (Collection $messages) {
+                foreach ($messages as $message) {
+                    $decodedBody = $this->decodeStoredMessageText((string) $message->message_body);
+                    $originalPayload = $message->provider_payload;
+                    $normalizedPayload = $this->normalizeProviderPayloadBody($message->provider_payload);
+                    $shouldUpdate = $decodedBody !== (string) $message->message_body
+                        || $normalizedPayload !== $originalPayload;
+
+                    if (!$shouldUpdate) {
+                        continue;
+                    }
+
+                    $message->forceFill([
+                        'message_body' => $decodedBody,
+                        'provider_payload' => $normalizedPayload,
+                    ])->save();
+                }
+            }, 'sms_message_id');
+    }
+
+    private function normalizeProviderPayloadBody(mixed $payload): mixed
+    {
+        if (!is_array($payload)) {
+            return $payload;
+        }
+
+        foreach (['message_body', 'MessageBody', 'message', 'body'] as $key) {
+            if (isset($payload[$key]) && is_string($payload[$key])) {
+                $payload[$key] = $this->decodeStoredMessageText($payload[$key]);
+            }
+        }
+
+        return $payload;
+    }
+
+    private function decodeStoredMessageText(?string $value): string
+    {
+        $text = trim((string) $value);
+        if ($text === '' || !$this->looksLikeHexEncodedMessage($text)) {
+            return (string) $value;
+        }
+
+        $decoded = hex2bin($text);
+        if ($decoded === false) {
+            return (string) $value;
+        }
+
+        $decoded = preg_replace('/\x00+/', '', $decoded) ?? $decoded;
+
+        if (!mb_check_encoding($decoded, 'UTF-8')) {
+            $decoded = mb_convert_encoding($decoded, 'UTF-8', 'UTF-8, ISO-8859-1, ASCII');
+        }
+
+        $decoded = trim($decoded);
+
+        return $this->isReadableDecodedMessage($decoded) ? $decoded : (string) $value;
+    }
+
+    private function looksLikeHexEncodedMessage(string $value): bool
+    {
+        return strlen($value) >= 8
+            && strlen($value) % 2 === 0
+            && preg_match('/^[0-9A-Fa-f]+$/', $value) === 1;
+    }
+
+    private function isReadableDecodedMessage(string $value): bool
+    {
+        if ($value === '') {
+            return false;
+        }
+
+        $printable = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $value);
+
+        return $printable !== null
+            && mb_strlen($printable) >= max(3, (int) floor(mb_strlen($value) * 0.7));
     }
 }

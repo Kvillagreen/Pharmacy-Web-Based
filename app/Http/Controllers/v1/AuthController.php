@@ -22,6 +22,25 @@ use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
+    private function rolePermissionNames(string $role): array
+    {
+        return match ($role) {
+            'staff' => ['dashboard', 'sales', 'sms', 'inventory', 'delivery'],
+            'pharmacist' => ['sales', 'sms', 'inventory', 'fefo', 'drugs', 'delivery'],
+            'branch_manager' => ['dashboard', 'inventory', 'fefo', 'delivery', 'reports'],
+            'owner', 'admin', 'super_admin' => ['dashboard', 'sales', 'sms', 'inventory', 'fefo', 'drugs', 'delivery', 'reports', 'users', 'settings', 'branches'],
+            default => ['dashboard'],
+        };
+    }
+
+    private function rolePermissionIds(string $role): array
+    {
+        return Permission::query()
+            ->whereIn('permission_name', $this->rolePermissionNames($role))
+            ->pluck('permission_id')
+            ->toArray();
+    }
+
     private function availableUserColumns(array $columns): array
     {
         return array_values(array_filter($columns, fn ($column) => Schema::hasColumn('users', $column)));
@@ -220,12 +239,7 @@ class AuthController extends Controller
 
             $user = User::create($createPayload);
 
-            $permissionIds = in_array($validated['role'], ['admin', 'owner'], true)
-                ? Permission::query()->pluck('permission_id')->toArray()
-                : Permission::query()
-                    ->where('permission_name', 'dashboard')
-                    ->pluck('permission_id')
-                    ->toArray();
+            $permissionIds = $this->rolePermissionIds($validated['role']);
 
             $user->permissions()->sync($permissionIds);
             $user->load('permissions');

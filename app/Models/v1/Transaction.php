@@ -19,7 +19,6 @@ class Transaction extends Model
     protected $fillable = [
         'user_id',
         'branch_id',
-        'transaction_type_id',
         'transaction_type',
         'total_amount',
         'payment_method',
@@ -45,6 +44,7 @@ class Transaction extends Model
         'customer_country',
         'customer_formatted_address',
         'regulated_classification',
+        'regulated_details',
     ];
 
     protected $appends = [
@@ -54,22 +54,14 @@ class Transaction extends Model
 
     protected $casts = [
         'documents_submitted' => 'boolean',
+        'regulated_details' => 'array',
     ];
-
-    public function transactions()
-    {
-        return $this->belongsTo(TransactionType::class, 'transaction_type_id', 'transaction_type_id');
-    }
 
      public function user()
     {
         return $this->belongsTo(User::class, 'user_id', 'user_id');
     }
 
-    public function transaction_type()
-    {
-        return $this->belongsTo(TransactionType::class, 'transaction_type_id', 'transaction_type_id');
-        }
     public function items()
     {
         return $this->hasMany(TransactionItem::class, 'transaction_id', 'transaction_id');

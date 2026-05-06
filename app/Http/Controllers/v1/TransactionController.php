@@ -239,6 +239,7 @@ class TransactionController extends Controller
             $regulatedCustomer = $regulatedClassification !== null
                 ? $this->storeRegulatedCustomer($data)
                 : null;
+            $regulatedDetails = $this->buildRegulatedDetails($data, $regulatedClassification, $regulatedCustomer?->formatted_address);
 
             $transaction = Transaction::create([
                 ...collect($data)->except('items')->toArray(),
@@ -256,6 +257,7 @@ class TransactionController extends Controller
                 'customer_country' => $regulatedCustomer?->country,
                 'customer_formatted_address' => $regulatedCustomer?->formatted_address,
                 'regulated_classification' => $regulatedClassification,
+                'regulated_details' => $regulatedDetails,
             ]);
 
             $transactionItems = [];
@@ -332,6 +334,19 @@ class TransactionController extends Controller
 
     public function show(string $id)
     {
+        $transaction = Transaction::query()
+            ->with([
+                'items.medicine',
+                'branch:branch_id,branch_name',
+                'user:user_id,first_name,last_name',
+                'regulatedCustomer',
+            ])
+            ->findOrFail($id);
+
+        return response()->json([
+            'success' => true,
+            'data' => $transaction,
+        ]);
     }
 
     public function edit(string $id)
@@ -410,6 +425,10 @@ class TransactionController extends Controller
             ->flatten(1)
             ->contains(fn ($row) => (bool) ($row->needs_protection ?? false));
 
+        if ($hasDangerous && $hasControlled) {
+            return 'mixed';
+        }
+
         if ($hasDangerous) {
             return 'dangerous';
         }
@@ -466,5 +485,56 @@ class TransactionController extends Controller
         }
 
         return implode(', ', $filtered);
+    }
+
+    private function buildRegulatedDetails(array $data, ?string $regulatedClassification, ?string $formattedAddress): ?array
+    {
+        if ($regulatedClassification === null) {
+            return null;
+        }
+
+        $base = [
+            'classification' => $regulatedClassification,
+            'has_prescription_details' => in_array($regulatedClassification, ['controlled', 'mixed'], true),
+            'has_dangerous_drug_details' => in_array($regulatedClassification, ['dangerous', 'mixed'], true),
+            'patient_name' => trim((string) ($data['patient_name'] ?? '')) ?: null,
+            'patient_address' => $formattedAddress ?: (trim((string) ($data['customer_address_line'] ?? '')) ?: null),
+            'patient_contact_number' => trim((string) ($data['customer_contact_number'] ?? '')) ?: null,
+            'patient_id_number' => trim((string) ($data['customer_id_number'] ?? '')) ?: null,
+            'prescriber_name' => trim((string) ($data['prescriber_name'] ?? '')) ?: null,
+        ];
+
+        $details = $base;
+
+        if (in_array($regulatedClassification, ['controlled', 'mixed'], true)) {
+            $details['prescription_details'] = array_filter([
+                'patient_age' => isset($data['patient_age']) ? (int) $data['patient_age'] : null,
+                'prescriber_prc_license_number' => trim((string) ($data['prescriber_prc_license_number'] ?? '')) ?: null,
+                'generic_name' => trim((string) ($data['prescribed_generic_name'] ?? '')) ?: null,
+                'brand_name' => trim((string) ($data['prescribed_brand_name'] ?? '')) ?: null,
+                'dosage_strength' => trim((string) ($data['prescribed_dosage_strength'] ?? '')) ?: null,
+                'dosage_form' => trim((string) ($data['prescribed_dosage_form'] ?? '')) ?: null,
+                'quantity_dispensed' => isset($data['prescribed_quantity_dispensed']) ? (int) $data['prescribed_quantity_dispensed'] : null,
+                'dispensing_date' => $data['dispensing_date'] ?? null,
+                'pharmacist_signature' => trim((string) ($data['pharmacist_signature'] ?? '')) ?: null,
+            ], fn ($value) => $value !== null && $value !== '');
+        }
+
+        if (in_array($regulatedClassification, ['dangerous', 'mixed'], true)) {
+            $details['dangerous_drug_details'] = array_filter([
+                'prescriber_clinic_address' => trim((string) ($data['prescriber_clinic_address'] ?? '')) ?: null,
+                'prescriber_s2_license_number' => trim((string) ($data['prescriber_s2_license_number'] ?? '')) ?: null,
+                'prescriber_ptr_number' => trim((string) ($data['prescriber_ptr_number'] ?? '')) ?: null,
+                'yellow_prescription_serial_number' => trim((string) ($data['yellow_prescription_serial_number'] ?? '')) ?: null,
+                'quantity_in_words' => trim((string) ($data['dangerous_quantity_in_words'] ?? '')) ?: null,
+                'quantity_in_figures' => trim((string) ($data['dangerous_quantity_in_figures'] ?? '')) ?: null,
+                'total_dosage' => trim((string) ($data['dangerous_total_dosage'] ?? '')) ?: null,
+                'treatment_duration' => trim((string) ($data['dangerous_treatment_duration'] ?? '')) ?: null,
+                'receiver_name' => trim((string) ($data['receiver_name'] ?? '')) ?: null,
+                'receiver_signature' => trim((string) ($data['receiver_signature'] ?? '')) ?: null,
+            ], fn ($value) => $value !== null && $value !== '');
+        }
+
+        return array_filter($details, fn ($value) => $value !== null && $value !== '' && $value !== []);
     }
 }
