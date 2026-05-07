@@ -118,7 +118,13 @@ class MedicineQuery {
         // Apply sort
         $sort = $this->getSort($request);
         if ($sort) {
-            $query->orderBy($sort[0], $sort[1]);
+            $query->reorder()->orderBy($sort[0], $sort[1]);
+
+            if ($sort[0] !== 'medicines.medicine_name' && $sort[0] !== 'medicine_name') {
+                $query->orderBy('medicines.medicine_name', 'asc');
+            }
+
+            $query->orderBy('inventories.inventory_id', 'asc');
         }
 
         return $query;

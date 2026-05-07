@@ -8,6 +8,7 @@ use App\Models\v1\Inventory;
 use App\Services\v1\MedicineQuery;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class FefoController extends Controller
 {
@@ -67,6 +68,10 @@ class FefoController extends Controller
         }
 
         $query->where('branches.status', 'active')
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('batches.status')
+                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+            })
             ->orderBy('batches.expiry_date', 'asc');
 
         if ($request->hasAny(['search', 'sort', 'filter']) || $branchId > 0 || $companyId > 0) {
@@ -108,6 +113,10 @@ class FefoController extends Controller
                     ->when($branchId <= 0 && $companyId > 0, fn ($iq) => $iq->where('branches.company_id', $companyId))
                     ->where('branches.status', 'active');
             })
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('status')
+                    ->orWhereNotIn('status', ['pulled_out', 'disposed']);
+            })
             ->whereDate('expiry_date', '>=', $today)
             ->whereDate('expiry_date', '<=', $today->copy()->addDays(30))
             ->count();
@@ -118,6 +127,10 @@ class FefoController extends Controller
                     ->when($branchId > 0, fn ($iq) => $iq->where('inventories.branch_id', $branchId))
                     ->when($branchId <= 0 && $companyId > 0, fn ($iq) => $iq->where('branches.company_id', $companyId))
                     ->where('branches.status', 'active');
+            })
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('status')
+                    ->orWhereNotIn('status', ['pulled_out', 'disposed']);
             })
             ->whereDate('expiry_date', '>=', $today->copy()->addDays(31))
             ->whereDate('expiry_date', '<=', $today->copy()->addDays(90))
@@ -130,6 +143,10 @@ class FefoController extends Controller
                     ->when($branchId <= 0 && $companyId > 0, fn ($iq) => $iq->where('branches.company_id', $companyId))
                     ->where('branches.status', 'active');
             })
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('status')
+                    ->orWhereNotIn('status', ['pulled_out', 'disposed']);
+            })
             ->whereDate('expiry_date', '>=', $today->copy()->addDays(91))
             ->count();
 
@@ -139,6 +156,10 @@ class FefoController extends Controller
                     ->when($branchId > 0, fn ($iq) => $iq->where('inventories.branch_id', $branchId))
                     ->when($branchId <= 0 && $companyId > 0, fn ($iq) => $iq->where('branches.company_id', $companyId))
                     ->where('branches.status', 'active');
+            })
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('status')
+                    ->orWhereNotIn('status', ['pulled_out', 'disposed']);
             })
             ->whereDate('expiry_date', '<', $today)
             ->count();
@@ -195,6 +216,47 @@ class FefoController extends Controller
 
     public function update(Request $request, string $id)
     {
+    }
+
+    public function pullOut(Request $request, string $batchId)
+    {
+        $batch = Batch::query()->findOrFail($batchId);
+
+        DB::transaction(function () use ($batch) {
+            $batch->update([
+                'status' => 'pulled_out',
+            ]);
+
+            Inventory::query()
+                ->where('batch_id', $batch->batch_id)
+                ->update(['stocks' => 0]);
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Expired batch pulled out successfully.',
+        ]);
+    }
+
+    public function updateLocation(Request $request, string $batchId)
+    {
+        $data = $request->validate([
+            'location' => ['required', 'string', 'max:255'],
+        ]);
+
+        $batch = Batch::query()->findOrFail($batchId);
+        $batch->update([
+            'location' => trim($data['location']),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Batch location updated successfully.',
+            'data' => [
+                'batch_id' => $batch->batch_id,
+                'location' => $batch->location,
+            ],
+        ]);
     }
 
     public function destroy(string $id)

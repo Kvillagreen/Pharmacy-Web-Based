@@ -20,9 +20,11 @@ class BranchResources extends JsonResource
             'branch_name' => $this->branch_name,
             'branch_address' => $this->branch_address,
             'branch_contact' => $this->branch_contact,
+            'theme_key' => $this->theme_key ?: 'emerald',
             'status' => $this->status,
             'branchId' => (int) $this->branch_id,
             'branchName' => $this->branch_name,
+            'themeKey' => $this->theme_key ?: 'emerald',
         ];
     }
 }

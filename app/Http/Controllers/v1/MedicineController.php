@@ -6,9 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\v1\MethodMedicineRequest;
 use App\Models\v1\Batch;
 use App\Models\v1\Inventory;
-use App\Models\v1\InventoryTransfer;
 use App\Models\v1\Medicine;
-use App\Models\v1\TransactionItem;
 use App\Services\v1\MedicineQuery;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -17,6 +15,69 @@ use Illuminate\Support\Facades\DB;
 
 class MedicineController extends Controller
 {
+    public function categories(Request $request)
+    {
+        $companyId = (int) $request->input('company_id', 0);
+        $branchId = (int) $request->input('branch_id', 0);
+        $scopeBranchIds = DB::table('branches')
+            ->where('status', 'active')
+            ->when($companyId > 0, fn ($query) => $query->where('company_id', $companyId))
+            ->when($branchId > 0, fn ($query) => $query->where('branch_id', $branchId))
+            ->pluck('branch_id');
+        $hasScopedFilter = $companyId > 0 || $branchId > 0;
+
+        $inventoryCategories = Medicine::query()
+            ->join('inventories', 'medicines.medicine_id', '=', 'inventories.medicine_id')
+            ->join('branches', 'inventories.branch_id', '=', 'branches.branch_id')
+            ->where('branches.status', 'active')
+            ->when($scopeBranchIds->isNotEmpty(), fn ($query) => $query->whereIn('inventories.branch_id', $scopeBranchIds))
+            ->when($hasScopedFilter && $scopeBranchIds->isEmpty(), fn ($query) => $query->whereRaw('1 = 0'))
+            ->whereNotNull('medicines.category')
+            ->whereRaw("TRIM(medicines.category) <> ''")
+            ->distinct()
+            ->pluck('medicines.category')
+            ->values();
+
+        $transactionCategories = DB::table('transaction_items')
+            ->join('transactions', 'transaction_items.transaction_id', '=', 'transactions.transaction_id')
+            ->join('medicines', 'transaction_items.medicine_id', '=', 'medicines.medicine_id')
+            ->when($scopeBranchIds->isNotEmpty(), fn ($query) => $query->whereIn('transactions.branch_id', $scopeBranchIds))
+            ->when($hasScopedFilter && $scopeBranchIds->isEmpty(), fn ($query) => $query->whereRaw('1 = 0'))
+            ->whereNotNull('medicines.category')
+            ->whereRaw("TRIM(medicines.category) <> ''")
+            ->distinct()
+            ->pluck('medicines.category')
+            ->values();
+
+        $globalMedicineCategories = Medicine::query()
+            ->whereNotNull('category')
+            ->whereRaw("TRIM(category) <> ''")
+            ->distinct()
+            ->pluck('category')
+            ->values();
+
+        $categories = $inventoryCategories
+            ->merge($transactionCategories)
+            ->merge($globalMedicineCategories)
+            ->flatMap(function ($category) {
+                return collect(explode(',', (string) $category))
+                    ->map(fn ($item) => trim((string) $item))
+                    ->filter(fn ($item) => $item !== '')
+                    ->values();
+            })
+            ->unique(fn ($category) => mb_strtolower((string) $category))
+            ->sort(fn ($left, $right) => strcasecmp((string) $left, (string) $right))
+            ->values();
+
+        return response()->json([
+            'success' => true,
+            'data' => $categories,
+            'company_id' => $companyId,
+            'branch_id' => $branchId,
+            'scope' => $branchId > 0 ? 'branch' : ($companyId > 0 ? 'company' : 'all'),
+        ]);
+    }
+
     public function publicCatalog(Request $request)
     {
         $perPage = max(6, min((int) $request->input('per_page', 12), 24));
@@ -433,124 +494,6 @@ class MedicineController extends Controller
         }
     }
 
-    public function mergeDuplicates(Request $request)
-    {
-        $validated = $request->validate([
-            'company_id' => ['nullable', 'integer'],
-            'branch_id' => ['nullable', 'integer', 'exists:branches,branch_id'],
-        ]);
-
-        $companyId = (int) ($validated['company_id'] ?? 0);
-        $branchId = (int) ($validated['branch_id'] ?? 0);
-
-        DB::beginTransaction();
-
-        try {
-            $inventories = Inventory::query()
-                ->with(['medicine', 'batch'])
-                ->join('branches', 'branches.branch_id', '=', 'inventories.branch_id')
-                ->where('branches.status', 'active')
-                ->when($branchId > 0, fn ($query) => $query->where('inventories.branch_id', $branchId))
-                ->when($branchId <= 0 && $companyId > 0, fn ($query) => $query->where('branches.company_id', $companyId))
-                ->select('inventories.*')
-                ->lockForUpdate()
-                ->get();
-
-            $groupedInventories = $inventories->groupBy(function (Inventory $inventory) {
-                return implode('|', [
-                    $inventory->branch_id,
-                    $this->medicineMergeKey($inventory->medicine),
-                    $this->batchMergeKey($inventory->batch),
-                ]);
-            });
-
-            $mergedGroups = 0;
-            $removedInventoryCount = 0;
-            $removedMedicineCount = 0;
-            $removedBatchCount = 0;
-            $syncedMedicineIds = [];
-
-            foreach ($groupedInventories as $group) {
-                if ($group->count() <= 1) {
-                    continue;
-                }
-
-                $primaryInventory = $group->sortBy('inventory_id')->first();
-                $duplicateInventories = $group->sortBy('inventory_id')->slice(1)->values();
-                $totalStocks = (int) $group->sum(fn (Inventory $inventory) => (int) $inventory->stocks);
-
-                $primaryInventory->update([
-                    'stocks' => $totalStocks,
-                ]);
-
-                $syncedMedicineIds[] = (int) $primaryInventory->medicine_id;
-                $mergedGroups++;
-
-                foreach ($duplicateInventories as $duplicateInventory) {
-                    $duplicateMedicineId = (int) $duplicateInventory->medicine_id;
-                    $duplicateBatchId = (int) $duplicateInventory->batch_id;
-
-                    $duplicateInventory->delete();
-                    $removedInventoryCount++;
-
-                    if ($duplicateMedicineId && $duplicateMedicineId !== (int) $primaryInventory->medicine_id) {
-                        InventoryTransfer::query()
-                            ->where('medicine_id', $duplicateMedicineId)
-                            ->update(['medicine_id' => $primaryInventory->medicine_id]);
-
-                        $syncedMedicineIds[] = $duplicateMedicineId;
-
-                        if (
-                            !Inventory::query()->where('medicine_id', $duplicateMedicineId)->exists()
-                            && !TransactionItem::query()->where('medicine_id', $duplicateMedicineId)->exists()
-                        ) {
-                            Medicine::query()->where('medicine_id', $duplicateMedicineId)->delete();
-                            $removedMedicineCount++;
-                        }
-                    }
-
-                    if ($duplicateBatchId && $duplicateBatchId !== (int) $primaryInventory->batch_id) {
-                        InventoryTransfer::query()
-                            ->where('batch_id', $duplicateBatchId)
-                            ->update(['batch_id' => $primaryInventory->batch_id]);
-
-                        if (!Inventory::query()->where('batch_id', $duplicateBatchId)->exists()) {
-                            Batch::query()->where('batch_id', $duplicateBatchId)->delete();
-                            $removedBatchCount++;
-                        }
-                    }
-                }
-            }
-
-            foreach (array_unique($syncedMedicineIds) as $medicineId) {
-                $this->syncMedicineStocks((int) $medicineId);
-            }
-
-            DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => $mergedGroups > 0
-                    ? 'Duplicate medicines were merged successfully.'
-                    : 'No duplicate medicines were found for this inventory scope.',
-                'data' => [
-                    'merged_groups' => $mergedGroups,
-                    'removed_inventories' => $removedInventoryCount,
-                    'removed_medicines' => $removedMedicineCount,
-                    'removed_batches' => $removedBatchCount,
-                ],
-            ]);
-        } catch (\Throwable $e) {
-            DB::rollBack();
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to merge duplicate medicines.',
-                'error' => $e->getMessage(),
-            ], 500);
-        }
-    }
-
     private function syncMedicineStocks(int $medicineId): void
     {
         $totalStocks = (int) Inventory::query()
@@ -562,40 +505,4 @@ class MedicineController extends Controller
             ->update(['stocks' => $totalStocks]);
     }
 
-    private function medicineMergeKey(?Medicine $medicine): string
-    {
-        if (!$medicine) {
-            return 'missing-medicine';
-        }
-
-        return implode('|', [
-            $this->normalizeMergeValue($medicine->medicine_name),
-            $this->normalizeMergeValue($medicine->generic_name),
-            $this->normalizeMergeValue($medicine->category),
-            $this->normalizeMergeValue($medicine->unit),
-            $this->normalizeMergeValue($medicine->dosage),
-            $this->normalizeMergeValue($medicine->price),
-            $this->normalizeMergeValue($medicine->type),
-            $this->normalizeMergeValue($medicine->reorder_level),
-            (int) $medicine->is_dangerous,
-            (int) $medicine->needs_protection,
-        ]);
-    }
-
-    private function batchMergeKey(?Batch $batch): string
-    {
-        if (!$batch) {
-            return 'missing-batch';
-        }
-
-        return implode('|', [
-            $this->normalizeMergeValue($batch->expiry_date),
-            $this->normalizeMergeValue($batch->received_date),
-        ]);
-    }
-
-    private function normalizeMergeValue(mixed $value): string
-    {
-        return strtolower(trim((string) ($value ?? '')));
-    }
 }

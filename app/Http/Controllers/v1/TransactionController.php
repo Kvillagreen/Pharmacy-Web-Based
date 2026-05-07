@@ -34,6 +34,7 @@ class TransactionController extends Controller
             ->select([
                 'inventories.inventory_id',
                 'inventories.branch_id',
+                'branches.branch_name',
                 'branches.company_id',
                 'inventories.medicine_id',
                 'medicines.medicine_name',

@@ -15,6 +15,21 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 class BranchController extends Controller
 {
     private const PUBLIC_BRANCH_CACHE_KEY = 'public_branch_list_v2';
+    private const SETTINGS_PERMISSION = 'settings';
+
+    private function authorizeSettingsAccess(Request $request)
+    {
+        $user = $request->user()?->loadMissing('permissions');
+
+        if (!$user || !$user->hasPermission(self::SETTINGS_PERMISSION)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You are only allowed to update your profile and security settings.',
+            ], 403);
+        }
+
+        return null;
+    }
 
     /**
      * Display a listing of the resource.
@@ -39,6 +54,10 @@ class BranchController extends Controller
     public function store(MethodBranchRequest $request)
     {
         try {
+            if ($denied = $this->authorizeSettingsAccess($request)) {
+                return $denied;
+            }
+
             $validated = $request->validated();
 
             DB::beginTransaction();
@@ -48,6 +67,7 @@ class BranchController extends Controller
                 'branch_name'    => trim($validated['branch_name']),
                 'branch_address' => trim($validated['branch_address']),
                 'branch_contact' => trim($validated['branch_contact']),
+                'theme_key'      => $validated['theme_key'] ?? 'emerald',
                 'status'         => $validated['status'] ?? 'active', // fallback
             ]);
             Cache::forget('public_branch_list');
@@ -141,6 +161,10 @@ class BranchController extends Controller
    public function update(MethodBranchRequest $request, string $id)
 {
     try {
+        if ($denied = $this->authorizeSettingsAccess($request)) {
+            return $denied;
+        }
+
         $validated = $request->validated();
 
         DB::beginTransaction();
@@ -152,6 +176,7 @@ class BranchController extends Controller
             'branch_name'    => trim($validated['branch_name']),
             'branch_address' => trim($validated['branch_address']),
             'branch_contact' => trim($validated['branch_contact']),
+            'theme_key'      => $validated['theme_key'] ?? 'emerald',
             'status'         => strtolower(trim($validated['status'])),
         ]);
 
@@ -205,6 +230,10 @@ class BranchController extends Controller
 public function destroy(string $id)
 {
     try {
+        if ($denied = $this->authorizeSettingsAccess(request())) {
+            return $denied;
+        }
+
         DB::beginTransaction();
 
         $branch = Branch::lockForUpdate()->findOrFail($id);
@@ -272,9 +301,11 @@ public function destroy(string $id)
                       'branch_name' => $branch->branch_name,
                       'branch_address' => $branch->branch_address,
                       'branch_contact' => $branch->branch_contact,
+                      'theme_key' => $branch->theme_key ?: 'emerald',
                       'status' => $branch->status,
                       'branchId' => (int) $branch->branch_id,
                       'branchName' => $branch->branch_name,
+                      'themeKey' => $branch->theme_key ?: 'emerald',
                   ])
                   ->values()
                   ->all()

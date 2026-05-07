@@ -52,7 +52,7 @@ class MethodTransactionRequest extends FormRequest
             'member_id_image' => ['nullable', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:5120'],
             'patient_age' => ['nullable', 'integer', 'min:0', 'max:150'],
             'prescriber_name' => ['nullable', 'string', 'max:150'],
-            'prescriber_prc_license_number' => ['nullable', 'string', 'max:100'],
+            'prescriber_prc_license_number' => ['nullable', 'string', 'regex:/^\d{7}$/'],
             'prescribed_generic_name' => ['nullable', 'string', 'max:150'],
             'prescribed_brand_name' => ['nullable', 'string', 'max:150'],
             'prescribed_dosage_strength' => ['nullable', 'string', 'max:100'],
@@ -96,6 +96,7 @@ class MethodTransactionRequest extends FormRequest
             'items.required' => 'Items are required.',
             'items.*.medicine_id.required' => 'Medicine ID is required for each item.',
             'items.*.quantity.required' => 'Quantity is required for each item.',
+            'prescriber_prc_license_number.regex' => 'PRC license number must be a 7-digit code.',
         ];
     }
 
@@ -128,7 +129,7 @@ class MethodTransactionRequest extends FormRequest
                     'prescribed_dosage_form' => 'Dosage form is required for prescribed drug transactions.',
                     'prescribed_quantity_dispensed' => 'Quantity dispensed is required for prescribed drug transactions.',
                     'dispensing_date' => 'Dispensing date is required for prescribed drug transactions.',
-                    'pharmacist_signature' => 'Pharmacist initials or signature is required for prescribed drug transactions.',
+                    'pharmacist_signature' => 'Pharmacist name is required for prescribed drug transactions.',
                 ];
 
                 foreach ($controlledFields as $field => $message) {

@@ -31,6 +31,9 @@ class SmsController extends Controller
 
         try {
             $result = $this->smsService->fetchReplies($limit);
+            if (!empty($result['messages'])) {
+                $result['messages'] = $this->smsService->filterDeletedConversationMessages($result['messages']);
+            }
             $storedConversations = $this->smsService->getStoredConversations($limit);
 
             if ($result['status'] < 400) {
@@ -227,7 +230,8 @@ class SmsController extends Controller
     public function destroyConversation(string $counterpartyNumber)
     {
         try {
-            $deletedCount = $this->smsService->deleteConversation($counterpartyNumber);
+            $cutoffAt = request()->query('cutoff_at');
+            $deletedCount = $this->smsService->deleteConversation($counterpartyNumber, $cutoffAt);
 
             if ($deletedCount <= 0) {
                 return $this->response(false, 'Conversation not found.', null, 404);
@@ -235,10 +239,12 @@ class SmsController extends Controller
 
             return $this->response(true, 'Conversation deleted successfully.', [
                 'deleted_count' => $deletedCount,
+                'cutoff_at' => $cutoffAt,
             ]);
         } catch (\Throwable $e) {
             \Log::error('Failed to delete SMS conversation.', [
                 'counterparty_number' => $counterpartyNumber,
+                'cutoff_at' => request()->query('cutoff_at'),
                 'error' => $e->getMessage(),
             ]);
 

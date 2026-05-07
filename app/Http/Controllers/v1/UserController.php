@@ -14,6 +14,8 @@ use Illuminate\Validation\Rule;
 
 class UserController extends Controller
 {
+    private const VIEW_ALL_USERS_PERMISSION = 'users_all_branches';
+
     private function defaultRolePermissionNames(string $role): array
     {
         return match ($role) {
@@ -58,16 +60,53 @@ class UserController extends Controller
         ];
     }
 
+    private function canViewUsersAcrossBranches(User $user): bool
+    {
+        return $user->hasPermission(self::VIEW_ALL_USERS_PERMISSION);
+    }
+
+    private function applyUserVisibilityScope(Request $request, $query, User $authUser)
+    {
+        $authCompanyId = (int) ($authUser->branch?->company_id ?? 0);
+        $requestedCompanyId = (int) $request->input('company_id', 0);
+
+        if ($authCompanyId > 0) {
+            $query->whereHas('branch', function ($branchQuery) use ($authCompanyId) {
+                $branchQuery->where('company_id', $authCompanyId);
+            });
+        } elseif ($requestedCompanyId > 0) {
+            $query->whereHas('branch', function ($branchQuery) use ($requestedCompanyId) {
+                $branchQuery->where('company_id', $requestedCompanyId);
+            });
+        }
+
+        if (!$this->canViewUsersAcrossBranches($authUser)) {
+            $query->where('branch_id', $authUser->branch_id);
+        }
+
+        return $query;
+    }
+
     public function index(Request $request)
     {
+        $authUser = User::with(['permissions', 'branch'])->find(auth()->id());
+
+        if (!$authUser) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized',
+            ], 401);
+        }
+
         $perPage = (int) $request->input('per_page', 9);
         $isExport = filter_var($request->input('export', false), FILTER_VALIDATE_BOOLEAN);
 
         $query = User::with(['branch.company', 'permissions'])
             ->whereIn('status', ['approved', 'pending', 'rejected']);
 
-        // Filter by company_id
-        if ($request->filled('company_id')) {
+        $query = $this->applyUserVisibilityScope($request, $query, $authUser);
+
+        if ($this->canViewUsersAcrossBranches($authUser) && $request->filled('company_id')) {
             $query->whereHas('branch', function ($q) use ($request) {
                 $q->where('company_id', $request->company_id);
             });
@@ -94,7 +133,9 @@ class UserController extends Controller
         $queryOnly = User::with(['branch.company', 'permissions'])
             ->whereIn('status', ['approved', 'pending', 'rejected']);
 
-        if ($request->filled('company_id')) {
+        $queryOnly = $this->applyUserVisibilityScope($request, $queryOnly, $authUser);
+
+        if ($this->canViewUsersAcrossBranches($authUser) && $request->filled('company_id')) {
             $queryOnly->whereHas('branch', function ($q) use ($request) {
                 $q->where('company_id', $request->company_id);
             });

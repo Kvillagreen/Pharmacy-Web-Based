@@ -62,8 +62,11 @@ class ReportController extends Controller
                     ],
                     'charts' => [
                         'daily_revenue' => [],
+                        'daily_transactions' => [],
+                        'daily_discounts' => [],
                         'payment_mix' => [],
                         'category_mix' => [],
+                        'inventory_status_mix' => [],
                     ],
                     'tables' => [
                         'branch_performance' => [],
@@ -148,6 +151,31 @@ class ReportController extends Controller
                 'label' => Carbon::parse($date)->format('M d'),
                 'total_revenue' => (float) ($row->total_revenue ?? 0),
                 'transaction_count' => (int) ($row->transaction_count ?? 0),
+            ];
+        })->values();
+
+        $dailyTransactions = $dailyRevenue->map(fn ($point) => [
+            'date' => $point['date'],
+            'label' => $point['label'],
+            'transaction_count' => (int) $point['transaction_count'],
+        ])->values();
+
+        $dailyDiscountRaw = (clone $normalTransactions)
+            ->selectRaw('DATE(created_at) as sale_date, SUM(discount) as total_discount')
+            ->whereBetween('created_at', [$rangeStart, $rangeEnd])
+            ->groupBy(DB::raw('DATE(created_at)'))
+            ->orderBy('sale_date')
+            ->get()
+            ->keyBy('sale_date');
+
+        $dailyDiscounts = collect(range(0, $days - 1))->map(function ($offset) use ($rangeStart, $dailyDiscountRaw) {
+            $date = $rangeStart->copy()->addDays($offset)->toDateString();
+            $row = $dailyDiscountRaw->get($date);
+
+            return [
+                'date' => $date,
+                'label' => Carbon::parse($date)->format('M d'),
+                'total_discount' => (float) ($row->total_discount ?? 0),
             ];
         })->values();
 
@@ -266,6 +294,28 @@ class ReportController extends Controller
             })
             ->values();
 
+        $inventoryStatusSnapshot = DB::table('medicines')
+            ->join('inventories', 'medicines.medicine_id', '=', 'inventories.medicine_id')
+            ->leftJoin('batches', 'inventories.batch_id', '=', 'batches.batch_id')
+            ->whereIn('inventories.branch_id', $scopeBranchIds)
+            ->selectRaw('
+                SUM(CASE WHEN inventories.stocks <= 0 THEN 1 ELSE 0 END) as out_of_stock_count,
+                SUM(CASE WHEN inventories.stocks > 0 AND inventories.stocks <= medicines.reorder_level THEN 1 ELSE 0 END) as low_stock_count,
+                SUM(CASE WHEN inventories.stocks > medicines.reorder_level AND batches.expiry_date IS NOT NULL AND batches.expiry_date <= ? THEN 1 ELSE 0 END) as expiring_soon_count,
+                SUM(CASE WHEN inventories.stocks > medicines.reorder_level AND (batches.expiry_date IS NULL OR batches.expiry_date > ?) THEN 1 ELSE 0 END) as healthy_count
+            ', [
+                $today->copy()->addDays(30)->toDateString(),
+                $today->copy()->addDays(30)->toDateString(),
+            ])
+            ->first();
+
+        $inventoryStatusMix = collect([
+            ['status' => 'Healthy', 'count' => (int) ($inventoryStatusSnapshot->healthy_count ?? 0)],
+            ['status' => 'Low Stock', 'count' => (int) ($inventoryStatusSnapshot->low_stock_count ?? 0)],
+            ['status' => 'Out of Stock', 'count' => (int) ($inventoryStatusSnapshot->out_of_stock_count ?? 0)],
+            ['status' => 'Expiring Soon', 'count' => (int) ($inventoryStatusSnapshot->expiring_soon_count ?? 0)],
+        ])->values();
+
         $recentTransactions = (clone $normalTransactions)
             ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name'])
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
@@ -337,8 +387,11 @@ class ReportController extends Controller
                 ],
                 'charts' => [
                     'daily_revenue' => $dailyRevenue,
+                    'daily_transactions' => $dailyTransactions,
+                    'daily_discounts' => $dailyDiscounts,
                     'payment_mix' => $paymentMix,
                     'category_mix' => $categoryMix,
+                    'inventory_status_mix' => $inventoryStatusMix,
                 ],
                 'tables' => [
                     'branch_performance' => $branchPerformance,

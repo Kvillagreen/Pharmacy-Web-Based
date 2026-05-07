@@ -10,6 +10,8 @@ use Illuminate\Support\Facades\Schema;
 
 class FortmedSmsService
 {
+    private const CONVERSATION_DELETE_MARKER_TAG = '__deleted_conversation__';
+
     public function fetchReplies(int $limit = 20): array
     {
         $response = $this->performRequest(
@@ -105,6 +107,12 @@ class FortmedSmsService
             $normalizedFrom = $this->normalizePhoneNumber($fromNumber);
             $normalizedTo = $this->normalizePhoneNumber($toNumber);
             $counterpartyNumber = $normalizedFrom !== '' ? $normalizedFrom : $normalizedTo;
+            $receivedAt = $this->parseProviderTimestamp($message['received_at'] ?? null);
+
+            if ($this->shouldHideConversationMessage($counterpartyNumber, $receivedAt)) {
+                continue;
+            }
+
             $decodedMessageBody = $this->decodeStoredMessageText((string) ($message['message_body'] ?? ''));
             $providerPayload = $this->normalizeProviderPayloadBody($message['raw'] ?? $message);
             $existingMessage = $providerMessageId !== ''
@@ -284,13 +292,13 @@ class FortmedSmsService
         $query = SmsMessage::query()->where('sms_message_id', $messageId);
 
         if (!$this->supportsDeletedSmsLogColumn()) {
-            return $query->delete() > 0;
+                return $query->delete() > 0;
         }
 
         return $query->update(['is_deleted' => true]) > 0;
     }
 
-    public function deleteConversation(?string $counterpartyNumber): int
+    public function deleteConversation(?string $counterpartyNumber, mixed $cutoffAt = null): int
     {
         if (!$this->smsMessageTableExists()) {
             return 0;
@@ -301,13 +309,47 @@ class FortmedSmsService
             return 0;
         }
 
-        $query = SmsMessage::query()->where('counterparty_number', $normalized);
+        $cutoff = $this->resolveConversationDeleteCutoff($normalized, $cutoffAt);
+        if (!$cutoff) {
+            return 0;
+        }
+
+        $query = SmsMessage::query()
+            ->where('counterparty_number', $normalized)
+            ->where('direction', '!=', 'system')
+            ->where(function ($builder) use ($cutoff) {
+                $builder->whereNotNull('provider_received_at')
+                    ->where('provider_received_at', '<=', $cutoff);
+            });
 
         if (!$this->supportsDeletedSmsLogColumn()) {
             return $query->delete();
         }
 
-        return $query->update(['is_deleted' => true]);
+        $deletedCount = $query->update(['is_deleted' => true]);
+        $this->ensureDeletedConversationMarker($normalized, $cutoff);
+
+        return $deletedCount;
+    }
+
+    public function filterDeletedConversationMessages(array $messages): array
+    {
+        return collect($messages)
+            ->filter(function (array $message) {
+                $counterparty = $this->normalizePhoneNumber(
+                    (string) ($message['normalized_from_number']
+                        ?? $message['from_number']
+                        ?? $message['normalized_to_number']
+                        ?? $message['to_number']
+                        ?? '')
+                );
+                $receivedAt = $message['received_at'] ?? null;
+
+                return !$this->shouldHideConversationMessage($counterparty, $receivedAt)
+                    && !$this->isDeletedStoredInboundMessage($message);
+            })
+            ->values()
+            ->all();
     }
 
     private function request()
@@ -605,6 +647,138 @@ class FortmedSmsService
         } catch (\Throwable) {
             return false;
         }
+    }
+
+    private function getDeletedConversationCutoff(?string $counterpartyNumber): ?Carbon
+    {
+        if (!$this->supportsDeletedSmsLogColumn()) {
+            return null;
+        }
+
+        $normalized = $this->normalizePhoneNumber($counterpartyNumber);
+        if ($normalized === '') {
+            return null;
+        }
+
+        $marker = SmsMessage::query()
+            ->where('counterparty_number', $normalized)
+            ->where('direction', 'system')
+            ->where('is_deleted', true)
+            ->where(
+                $this->supportsExtendedSmsLogColumns() ? 'template_tag' : 'message_body',
+                self::CONVERSATION_DELETE_MARKER_TAG
+            )
+            ->orderByDesc('provider_received_at')
+            ->orderByDesc('sms_message_id')
+            ->first();
+
+        return $marker?->provider_received_at;
+    }
+
+    private function ensureDeletedConversationMarker(string $counterpartyNumber, Carbon $cutoff): void
+    {
+        if (!$this->supportsDeletedSmsLogColumn() || $counterpartyNumber === '') {
+            return;
+        }
+
+        $existingMarker = SmsMessage::query()
+            ->where('counterparty_number', $counterpartyNumber)
+            ->where('direction', 'system')
+            ->where(
+                $this->supportsExtendedSmsLogColumns() ? 'template_tag' : 'message_body',
+                self::CONVERSATION_DELETE_MARKER_TAG
+            )
+            ->first();
+
+        if ($existingMarker) {
+            $existingCutoff = $existingMarker->provider_received_at;
+            $resolvedCutoff = $existingCutoff && $existingCutoff->greaterThan($cutoff) ? $existingCutoff : $cutoff;
+
+            $existingMarker->forceFill([
+                'is_deleted' => true,
+                'provider_received_at' => $resolvedCutoff,
+                'provider_payload' => [
+                    'type' => self::CONVERSATION_DELETE_MARKER_TAG,
+                    'cutoff_at' => $resolvedCutoff->toDateTimeString(),
+                ],
+            ])->save();
+            return;
+        }
+
+        $attributes = [
+            'direction' => 'system',
+            'provider_message_id' => 'deleted-conversation-' . $counterpartyNumber,
+            'provider_original_message_id' => null,
+            'user_id' => null,
+            'branch_id' => null,
+            'sender_name' => null,
+            'from_number' => null,
+            'to_number' => null,
+            'normalized_from_number' => null,
+            'normalized_to_number' => null,
+            'counterparty_number' => $counterpartyNumber,
+            'message_body' => self::CONVERSATION_DELETE_MARKER_TAG,
+            'provider_received_at' => $cutoff,
+            'provider_payload' => [
+                'type' => self::CONVERSATION_DELETE_MARKER_TAG,
+                'cutoff_at' => $cutoff->toDateTimeString(),
+            ],
+            'is_deleted' => true,
+        ];
+
+        if ($this->supportsExtendedSmsLogColumns()) {
+            $attributes['reference_number'] = $this->generateReferenceNumber('DEL');
+            $attributes['template_tag'] = self::CONVERSATION_DELETE_MARKER_TAG;
+        }
+
+        SmsMessage::create($attributes);
+    }
+
+    private function resolveConversationDeleteCutoff(string $counterpartyNumber, mixed $cutoffAt = null): ?Carbon
+    {
+        $requestedCutoff = $this->parseProviderTimestamp($cutoffAt);
+        $latestVisible = SmsMessage::query()
+            ->where('counterparty_number', $counterpartyNumber)
+            ->where('direction', '!=', 'system')
+            ->when($this->supportsDeletedSmsLogColumn(), fn ($query) => $query->where('is_deleted', false))
+            ->orderByDesc('provider_received_at')
+            ->orderByDesc('sms_message_id')
+            ->first();
+
+        $latestVisibleCutoff = $latestVisible?->provider_received_at;
+        if ($requestedCutoff && $latestVisibleCutoff) {
+            return $requestedCutoff->lessThan($latestVisibleCutoff) ? $requestedCutoff : $latestVisibleCutoff;
+        }
+
+        return $requestedCutoff ?? $latestVisibleCutoff;
+    }
+
+    private function shouldHideConversationMessage(?string $counterpartyNumber, mixed $receivedAt): bool
+    {
+        $cutoff = $this->getDeletedConversationCutoff($counterpartyNumber);
+        $messageTimestamp = $receivedAt instanceof Carbon ? $receivedAt : $this->parseProviderTimestamp($receivedAt);
+
+        return $cutoff !== null
+            && $messageTimestamp !== null
+            && $messageTimestamp->lessThanOrEqualTo($cutoff);
+    }
+
+    private function isDeletedStoredInboundMessage(array $message): bool
+    {
+        if (!$this->supportsDeletedSmsLogColumn()) {
+            return false;
+        }
+
+        $providerMessageId = (string) ($message['id'] ?? '');
+        if ($providerMessageId === '') {
+            return false;
+        }
+
+        return SmsMessage::query()
+            ->where('direction', 'inbound')
+            ->where('provider_message_id', $providerMessageId)
+            ->where('is_deleted', true)
+            ->exists();
     }
 
     private function repairUnreadableStoredMessages(): void

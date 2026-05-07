@@ -22,6 +22,8 @@ use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
+    private const SETTINGS_PERMISSION = 'settings';
+
     private function rolePermissionNames(string $role): array
     {
         return match ($role) {
@@ -90,6 +92,11 @@ class AuthController extends Controller
         ];
     }
 
+    private function canManageFullSettings(User $user): bool
+    {
+        return $user->hasPermission(self::SETTINGS_PERMISSION);
+    }
+
     private function companyDataForUser(User $user): ?object
     {
         return User::join('branches', 'users.branch_id', '=', 'branches.branch_id')
@@ -118,9 +125,9 @@ class AuthController extends Controller
             return $this->response(false, 'Too many login attempts. Try again later.');
         }
 
-        $user = User::with('permissions')
-            ->where('email', $validated['email'])
-            ->first();
+          $user = User::with(['permissions', 'branch'])
+              ->where('email', $validated['email'])
+              ->first();
 
         if (!$user || !Hash::check($validated['password'], $user->password)) {
             RateLimiter::hit($key, 60);
@@ -164,15 +171,17 @@ class AuthController extends Controller
 
         $companyData = $this->companyDataForUser($user);
 
-        $responseUser = [
-            'user_id' => $user->user_id,
-            'first_name' => $user->first_name,
-            'last_name' => $user->last_name,
-            'email' => $user->email,
-            'branch_id' => $user->branch_id,
-            'role' => $user->role,
-            'address' => $user->address,
-            'status' => $user->status,
+          $responseUser = [
+              'user_id' => $user->user_id,
+              'first_name' => $user->first_name,
+              'last_name' => $user->last_name,
+              'email' => $user->email,
+              'branch_id' => $user->branch_id,
+              'branch_name' => $user->branch?->branch_name,
+              'theme_key' => $user->branch?->theme_key ?? 'emerald',
+              'role' => $user->role,
+              'address' => $user->address,
+              'status' => $user->status,
             'company_id' => $companyData?->company_id,
             'company_name' => $companyData?->company_name,
             'company_email' => $companyData?->company_email,
@@ -504,17 +513,18 @@ class AuthController extends Controller
         $companyData = $this->companyDataForUser($user);
 
         return $this->response(true, 'Settings loaded successfully', [
-            'profile' => [
-                'user_id' => $user->user_id,
-                'first_name' => $user->first_name,
-                'last_name' => $user->last_name,
-                'email' => $user->email,
-                'address' => $user->address,
-                'branch_id' => $user->branch_id,
-                'branch_name' => $user->branch?->branch_name ?? $companyData?->branch_name,
-                'company_id' => $companyData?->company_id,
-                'company_name' => $companyData?->company_name,
-                'company_email' => $companyData?->company_email,
+              'profile' => [
+                  'user_id' => $user->user_id,
+                  'first_name' => $user->first_name,
+                  'last_name' => $user->last_name,
+                  'email' => $user->email,
+                  'address' => $user->address,
+                  'branch_id' => $user->branch_id,
+                  'branch_name' => $user->branch?->branch_name ?? $companyData?->branch_name,
+                  'theme_key' => $user->branch?->theme_key ?? 'emerald',
+                  'company_id' => $companyData?->company_id,
+                  'company_name' => $companyData?->company_name,
+                  'company_email' => $companyData?->company_email,
                 'tin_number' => $companyData?->tin_number,
             ],
             'access' => [
@@ -522,6 +532,7 @@ class AuthController extends Controller
                 'status' => $user->status,
                 'permission_count' => count($permissionNames),
                 'permissions' => $permissionNames,
+                'can_manage_all_settings' => $this->canManageFullSettings($user),
             ],
             'notifications' => $this->notificationPreferences($user),
             'security' => [
@@ -542,12 +553,19 @@ class AuthController extends Controller
 
     public function updateNotificationPreferences(Request $request)
     {
-        $user = User::find(auth()->id());
+        $user = User::with('permissions')->find(auth()->id());
 
         if (!$user) {
             return $this->response(false, 'User not found', null, [
                 'authenticated' => false,
             ]);
+        }
+
+        if (!$this->canManageFullSettings($user)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You are only allowed to update your profile and security settings.',
+            ], 403);
         }
 
         $validated = $request->validate([

@@ -27,6 +27,7 @@ class MethodBranchRequest extends FormRequest
             ],
             'branch_address' => ['required', 'string', 'max:500'],
             'branch_contact' => ['required', 'string', 'max:50'],
+            'theme_key' => ['nullable', 'string', Rule::in(['emerald', 'ocean', 'sunset', 'royal', 'rose', 'amber', 'teal', 'slate', 'orchid', 'cocoa'])],
             'status' => ['nullable', 'string', Rule::in(['active', 'deleted', 'inactive'])],
         ];
     }
@@ -37,6 +38,7 @@ class MethodBranchRequest extends FormRequest
             'branch_name' => trim((string) $this->branch_name),
             'branch_address' => trim((string) $this->branch_address),
             'branch_contact' => trim((string) $this->branch_contact),
+            'theme_key' => strtolower(trim((string) ($this->theme_key ?: 'emerald'))),
             'status' => strtolower(trim((string) $this->status)),
         ]);
     }

@@ -35,6 +35,7 @@ class UserSeeder extends Seeder
             ['permission_name' => 'settings', 'description' => 'Can access settings page'],
             ['permission_name' => 'users', 'description' => 'Can access users page'],
             ['permission_name' => 'branches', 'description' => 'Can access branches page'],
+            ['permission_name' => 'users_all_branches', 'description' => 'Can view users across all branches in the same company'],
         ];
 
         foreach ($permissions as $permission) {

@@ -19,6 +19,7 @@ class ControlledDrugController extends Controller
         $days = max(7, min((int) $request->input('days', 30), 90));
         $perPage = max(5, min((int) $request->input('per_page', 10), 50));
         $search = trim((string) $request->input('search', ''));
+        $sort = trim((string) $request->input('sort', 'medicine_name'));
 
         $today = Carbon::today();
         $rangeStart = Carbon::today()->subDays($days - 1)->startOfDay();
@@ -107,25 +108,50 @@ class ControlledDrugController extends Controller
                 $query->where('medicines.is_dangerous', true)
                     ->orWhere('medicines.needs_protection', true);
             })
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('batches.status')
+                    ->orWhereNotIn('batches.status', ['disposed']);
+            })
             ->when($search !== '', function ($query) use ($search) {
                 $query->where(function ($nested) use ($search) {
                     $nested->where('medicines.medicine_name', 'like', '%' . $search . '%')
                         ->orWhere('medicines.generic_name', 'like', '%' . $search . '%')
                         ->orWhere('medicines.category', 'like', '%' . $search . '%')
-                        ->orWhere('branches.branch_name', 'like', '%' . $search . '%');
+                        ->orWhere('batches.location', 'like', '%' . $search . '%');
                 });
-            })
+            });
+
+        $sortField = ltrim($sort, '-');
+        $sortDirection = str_starts_with($sort, '-') ? 'desc' : 'asc';
+        $sortableColumns = [
+            'medicine_id' => 'medicines.medicine_id',
+            'medicine_name' => 'medicines.medicine_name',
+            'category' => 'medicines.category',
+            'branch_name' => 'branches.branch_name',
+            'stocks' => 'inventories.stocks',
+            'expiry_date' => 'batches.expiry_date',
+        ];
+        $sortColumn = $sortableColumns[$sortField] ?? 'medicines.medicine_name';
+
+        $inventoryQuery
+            ->orderBy($sortColumn, $sortDirection)
             ->orderBy('medicines.medicine_name')
-            ->orderBy('branches.branch_name');
+            ->orderBy('branches.branch_name')
+            ->orderBy('inventories.inventory_id');
 
         $paginatedInventory = $inventoryQuery->paginate($perPage);
 
         $scopedMedicines = Medicine::query()
             ->join('inventories', 'medicines.medicine_id', '=', 'inventories.medicine_id')
+            ->leftJoin('batches', 'inventories.batch_id', '=', 'batches.batch_id')
             ->whereIn('inventories.branch_id', $scopeBranchIds)
             ->where(function ($query) {
                 $query->where('medicines.is_dangerous', true)
                     ->orWhere('medicines.needs_protection', true);
+            })
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('batches.status')
+                    ->orWhereNotIn('batches.status', ['disposed']);
             })
             ->select(
                 'medicines.medicine_id',
@@ -150,12 +176,20 @@ class ControlledDrugController extends Controller
 
         $expiring30Count = (int) Batch::query()
             ->whereHas('inventories', fn ($query) => $query->whereIn('branch_id', $scopeBranchIds))
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('status')
+                    ->orWhereNotIn('status', ['disposed']);
+            })
             ->whereDate('expiry_date', '>=', $today)
             ->whereDate('expiry_date', '<=', $today->copy()->addDays(30))
             ->count();
 
         $expiredCount = (int) Batch::query()
             ->whereHas('inventories', fn ($query) => $query->whereIn('branch_id', $scopeBranchIds))
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('status')
+                    ->orWhereNotIn('status', ['disposed']);
+            })
             ->whereDate('expiry_date', '<', $today)
             ->count();
 
@@ -228,5 +262,46 @@ class ControlledDrugController extends Controller
             'headline' => $headline,
             'highlights' => $highlights,
         ];
+    }
+
+    public function dispose(Request $request, string $batchId)
+    {
+        $batch = Batch::query()->findOrFail($batchId);
+
+        DB::transaction(function () use ($batch) {
+            $batch->update([
+                'status' => 'disposed',
+            ]);
+
+            DB::table('inventories')
+                ->where('batch_id', $batch->batch_id)
+                ->update(['stocks' => 0]);
+        });
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Controlled-drug batch disposed successfully.',
+        ]);
+    }
+
+    public function updateLocation(Request $request, string $batchId)
+    {
+        $data = $request->validate([
+            'location' => ['required', 'string', 'max:255'],
+        ]);
+
+        $batch = Batch::query()->findOrFail($batchId);
+        $batch->update([
+            'location' => trim($data['location']),
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Controlled-drug location updated successfully.',
+            'data' => [
+                'batch_id' => $batch->batch_id,
+                'location' => $batch->location,
+            ],
+        ]);
     }
 }

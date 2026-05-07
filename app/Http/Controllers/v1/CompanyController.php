@@ -11,6 +11,21 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 class CompanyController extends Controller
 {
+    private const SETTINGS_PERMISSION = 'settings';
+
+    private function authorizeSettingsAccess(Request $request)
+    {
+        $user = $request->user()?->loadMissing('permissions');
+
+        if (!$user || !$user->hasPermission(self::SETTINGS_PERMISSION)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You are only allowed to update your profile and security settings.',
+            ], 403);
+        }
+
+        return null;
+    }
     /**
      * Display a listing of the resource.
      */
@@ -57,6 +72,10 @@ class CompanyController extends Controller
     public function update(MethodCompanyRequest $request, string $id)
 {
     try {
+        if ($denied = $this->authorizeSettingsAccess($request)) {
+            return $denied;
+        }
+
         $validated = $request->validated();
 
         DB::beginTransaction();

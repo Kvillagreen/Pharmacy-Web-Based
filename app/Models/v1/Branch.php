@@ -16,12 +16,14 @@ class Branch extends Model
     'branch_name',
     'branch_address',
     'branch_contact',
+    'theme_key',
     'status',
 ];
 
     // Optional: default attributes
     protected $attributes = [
         'status' => 'active', // default status
+        'theme_key' => 'emerald',
     ];
 
     protected $public = [

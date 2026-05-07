@@ -45,6 +45,7 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
         Route::get('/branch/{branch}', [BranchController::class, 'show']);
         Route::get('/permissions', [PermissionController::class, 'index']);
         Route::get('/permissions/{permission}', [PermissionController::class, 'show']);
+        Route::get('/medicine/categories', [MedicineController::class, 'categories']);
         Route::get('/medicine', [MedicineController::class, 'index']);
         Route::get('/medicine/{medicine}', [MedicineController::class, 'show']);
         Route::get('/fefo', [FefoController::class, 'index']);
@@ -68,7 +69,6 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
         Route::apiResource('/branch', BranchController::class)->except(['index', 'show']);
         Route::apiResource('/permissions', PermissionController::class)->except(['index', 'show']);
         Route::post('/change-password', [AuthController::class, 'changePassword']);
-        Route::post('/medicine/merge-duplicates', [MedicineController::class, 'mergeDuplicates']);
         Route::post('/sms/messages', [SmsController::class, 'send']);
         Route::delete('/sms/messages/{messageId}', [SmsController::class, 'destroyMessage']);
         Route::delete('/sms/conversations/{counterpartyNumber}', [SmsController::class, 'destroyConversation']);
@@ -78,6 +78,10 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
         Route::post('/inventory-transfer', [InventoryTransferController::class, 'store']);
         Route::post('/inventory-transfer/{id}/accept', [InventoryTransferController::class, 'accept']);
         Route::post('/inventory-transfer/{id}/decline', [InventoryTransferController::class, 'decline']);
+        Route::post('/fefo/{batch}/pull-out', [FefoController::class, 'pullOut']);
+        Route::post('/fefo/{batch}/update-location', [FefoController::class, 'updateLocation']);
+        Route::post('/controlled-drugs/{batch}/dispose', [ControlledDrugController::class, 'dispose']);
+        Route::post('/controlled-drugs/{batch}/update-location', [ControlledDrugController::class, 'updateLocation']);
         Route::apiResource('/company', CompanyController::class)->except(['index', 'show']);
         Route::post('/user/update-status/{id}/{status}', [UserController::class, 'updateUserStatus']);
         Route::post('/user/update-branch/{id}/{branch_id}', [UserController::class, 'updateUserBranch']);
