@@ -327,6 +327,7 @@ class ReportController extends Controller
                 'branch_name' => $transaction->branch?->branch_name,
                 'cashier_name' => trim(($transaction->user?->first_name ?? '') . ' ' . ($transaction->user?->last_name ?? '')),
                 'payment_method' => $transaction->payment_method,
+                'reference_number' => $transaction->reference_number,
                 'total_amount' => (float) $transaction->total_amount,
                 'discount' => (float) ($transaction->discount ?? 0),
                 'created_at' => $transaction->created_at,
@@ -421,7 +422,7 @@ class ReportController extends Controller
         if ($selectedYear >= $currentYear) {
             return response()->json([
                 'success' => false,
-                'message' => 'BIR annual declarations can only be generated for a completed taxable year.',
+                'message' => 'BIR 0605 summaries can only be generated for a completed taxable year.',
             ], 422);
         }
 
@@ -462,18 +463,45 @@ class ReportController extends Controller
         $taxableNetIncome = round(max($grossIncome - $deductions, 0), 2);
         $incomeTaxRate = 0.25;
         $incomeTaxDue = round($taxableNetIncome * $incomeTaxRate, 2);
+        $basicTaxPayment = $incomeTaxDue;
+        $surcharge = 0.00;
+        $interest = 0.00;
+        $compromise = 0.00;
+        $totalAmountPayable = round($basicTaxPayment + $surcharge + $interest + $compromise, 2);
+        $returnPeriod = Carbon::create($selectedYear, 12, 31)->toDateString();
+        $dueDate = Carbon::create($selectedYear + 1, 4, 15)->toDateString();
+        $registeredAddress = trim((string) ($branch->branch_address ?? ''));
+        $telephoneNumber = trim((string) ($branch->branch_contact ?? ''));
+        $taxpayerName = trim(($branch->company?->company_name ?? 'Pharmacy') . ' - ' . $branch->branch_name . ' Branch');
+        $lineOfBusiness = 'Retail Pharmacy / Drugstore Operations';
 
         return response()->json([
             'success' => true,
             'data' => [
-                'form_no' => '1702-RT',
+                'form_no' => '0605',
                 'generated_at' => now(),
                 'branch_id' => $branch->branch_id,
                 'branch_name' => $branch->branch_name,
                 'company_id' => $branch->company?->company_id,
-                'taxpayer_name' => trim(($branch->company?->company_name ?? 'Pharmacy') . ' - ' . $branch->branch_name . ' Branch'),
+                'taxpayer_name' => $taxpayerName,
                 'tin_number' => $branch->company?->tin_number,
                 'taxable_year' => $selectedYear,
+                'return_period' => $returnPeriod,
+                'due_date' => $dueDate,
+                'tax_type_code' => 'IT',
+                'tax_type_description' => 'Income Tax',
+                'atc' => 'MC 200',
+                'atc_description' => 'Others',
+                'manner_of_payment' => 'Voluntary Payment',
+                'type_of_payment' => 'Others - Income tax payment summary via BIR Form 0605',
+                'line_of_business' => $lineOfBusiness,
+                'registered_address' => $registeredAddress,
+                'telephone_number' => $telephoneNumber,
+                'basic_tax_payment' => $basicTaxPayment,
+                'surcharge' => $surcharge,
+                'interest' => $interest,
+                'compromise' => $compromise,
+                'total_amount_payable' => $totalAmountPayable,
                 'transaction_count' => (int) ($transactionSummary->transaction_count ?? 0),
                 'gross_sales_receipts' => $grossSales,
                 'sales_discounts' => $salesDiscounts,
@@ -486,9 +514,10 @@ class ReportController extends Controller
                 'income_tax_due' => $incomeTaxDue,
                 'is_ready_to_file' => false,
                 'data_notes' => [
-                    'This is a BIR Form 1702-RT style annual declaration summary generated from recorded sales transactions.',
-                    'Cost of sales and itemized deductions are currently set to 0.00 because the system does not yet store audited cost and expense ledgers.',
-                    'Please reconcile this summary with your accountant, audited financial statements, and official BIR filing requirements before submission.',
+                    'This output follows the BIR Form 0605 payment-form layout using the currently available sales and tax summary data in the system.',
+                    'ATC, tax type code, due date, and payment classification should still be validated against the actual liability being paid before filing.',
+                    'Basic tax payment is derived from the computed annual tax due in the current report, while surcharge, interest, and compromise are set to 0.00 unless manually assessed.',
+                    'Please reconcile this payment summary with your accountant and official BIR filing requirements before submission.',
                 ],
             ],
         ]);
@@ -555,6 +584,7 @@ class ReportController extends Controller
             'branch_name' => $transaction->branch?->branch_name,
             'cashier_name' => trim(($transaction->user?->first_name ?? '') . ' ' . ($transaction->user?->last_name ?? '')),
             'payment_method' => $transaction->payment_method,
+            'reference_number' => $transaction->reference_number,
             'total_amount' => (float) $transaction->total_amount,
             'discount' => (float) ($transaction->discount ?? 0),
             'patient_name' => $transaction->patient_name,

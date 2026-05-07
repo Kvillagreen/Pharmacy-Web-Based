@@ -22,6 +22,7 @@ class Transaction extends Model
         'transaction_type',
         'total_amount',
         'payment_method',
+        'reference_number',
         'sub_total',
         'change',
         'discount',

@@ -37,6 +37,7 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
         Route::get('/controlled-drugs', [ControlledDrugController::class, 'index']);
         Route::get('/reports', [ReportController::class, 'index']);
         Route::get('/reports/bir-annual', [ReportController::class, 'birAnnualDeclaration']);
+        Route::get('/reports/transactions', [TransactionController::class, 'records']);
         Route::get('/sms/replies', [SmsController::class, 'replies']);
         Route::get('/sms/logs', [SmsController::class, 'logs']);
         Route::get('/user/permissions/options', [UserController::class, 'permissionOptions']);

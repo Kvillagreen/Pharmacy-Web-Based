@@ -56,15 +56,11 @@ class MedicineController extends Controller
             ->pluck('category')
             ->values();
 
-        $categories = $inventoryCategories
+        $categories = collect($this->pharmacyCategoryCatalog())
+            ->merge($inventoryCategories)
             ->merge($transactionCategories)
             ->merge($globalMedicineCategories)
-            ->flatMap(function ($category) {
-                return collect(explode(',', (string) $category))
-                    ->map(fn ($item) => trim((string) $item))
-                    ->filter(fn ($item) => $item !== '')
-                    ->values();
-            })
+            ->flatMap(fn ($category) => $this->normalizeCategoryValues($category))
             ->unique(fn ($category) => mb_strtolower((string) $category))
             ->sort(fn ($left, $right) => strcasecmp((string) $left, (string) $right))
             ->values();
@@ -72,6 +68,7 @@ class MedicineController extends Controller
         return response()->json([
             'success' => true,
             'data' => $categories,
+            'count' => $categories->count(),
             'company_id' => $companyId,
             'branch_id' => $branchId,
             'scope' => $branchId > 0 ? 'branch' : ($companyId > 0 ? 'company' : 'all'),
@@ -503,6 +500,106 @@ class MedicineController extends Controller
         Medicine::query()
             ->where('medicine_id', $medicineId)
             ->update(['stocks' => $totalStocks]);
+    }
+
+    private function normalizeCategoryValues($category)
+    {
+        return collect(preg_split('/[,;|]+/', (string) $category) ?: [])
+            ->map(fn ($item) => trim((string) $item))
+            ->filter(fn ($item) => $item !== '')
+            ->values();
+    }
+
+    private function pharmacyCategoryCatalog(): array
+    {
+        return [
+            'Analgesic',
+            'Anesthetic',
+            'Anti-Allergy',
+            'Antacid',
+            'Anthelmintic',
+            'Anti-Anginal',
+            'Anti-Anxiety',
+            'Antiarrhythmic',
+            'Antiasthmatic',
+            'Antibiotic',
+            'Anticoagulant',
+            'Anticonvulsant',
+            'Antidepressant',
+            'Antidiabetic',
+            'Antidiarrheal',
+            'Antidote',
+            'Antiemetic',
+            'Antifungal',
+            'Anti-Gout',
+            'Antihistamine',
+            'Antihypertensive',
+            'Anti-Inflammatory',
+            'Antilipidemic',
+            'Antimalarial',
+            'Antimigraine',
+            'Antineoplastic',
+            'Antiplatelet',
+            'Antipsychotic',
+            'Antipyretic',
+            'Antiseptic',
+            'Antispasmodic',
+            'Antitussive',
+            'Antivertigo',
+            'Antiviral',
+            'Bronchodilator',
+            'Cardiovascular',
+            'Cold and Flu',
+            'Contraceptive',
+            'Corticosteroid',
+            'Cough Preparation',
+            'Dermatology',
+            'Diagnostic Agent',
+            'Diuretic',
+            'Electrolyte Replacement',
+            'Emergency Medicine',
+            'Endocrine',
+            'ENT Preparations',
+            'Expectorant',
+            'Eye Care',
+            'Gastrointestinal',
+            'Genitourinary',
+            'Hematinic',
+            'Hormonal Therapy',
+            'Hospital Consumable',
+            'Immunomodulator',
+            'Immunosuppressant',
+            'Infant Care',
+            'Laxative',
+            'Maintenance',
+            'Medical Supply',
+            'Mineral Supplement',
+            'Mucolytic',
+            'Muscle Relaxant',
+            'Nasal Preparation',
+            'Neurology',
+            'NSAID',
+            'Nutritional Supplement',
+            'Obstetrics and Gynecology',
+            'Ophthalmic',
+            'Otic',
+            'Pain Relief',
+            'Parenteral Nutrition',
+            'Pediatric',
+            'Probiotic',
+            'Respiratory',
+            'Sedative',
+            'Sleep Aid',
+            'Steroid',
+            'Supplement',
+            'Topical Preparation',
+            'Urologic',
+            'Vaccines',
+            'Vasodilator',
+            'Veterinary',
+            'Vitamin',
+            'Wound Care',
+        ];
     }
 
 }

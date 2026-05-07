@@ -19,6 +19,113 @@ use Illuminate\Support\Facades\DB;
 
 class TransactionController extends Controller
 {
+    public function records(Request $request)
+    {
+        $companyId = (int) $request->input('company_id', 0);
+        $branchId = (int) $request->input('branch_id', 0);
+        $perPage = max(5, min((int) $request->input('per_page', 10), 50));
+        $search = trim((string) $request->input('search', ''));
+        $paymentMethod = trim((string) $request->input('payment_method', ''));
+        $classification = strtolower(trim((string) $request->input('classification', 'all')));
+        $sort = strtolower(trim((string) $request->input('sort', 'newest')));
+
+        $query = Transaction::query()
+            ->with([
+                'branch:branch_id,branch_name,company_id,status',
+                'user:user_id,first_name,last_name',
+            ])
+            ->whereHas('branch', function ($branchQuery) use ($companyId, $branchId) {
+                $branchQuery->where('status', 'active')
+                    ->when($branchId > 0, fn ($q) => $q->where('branch_id', $branchId))
+                    ->when($branchId <= 0 && $companyId > 0, fn ($q) => $q->where('company_id', $companyId));
+            });
+
+        if ($paymentMethod !== '') {
+            $query->where('payment_method', $paymentMethod);
+        }
+
+        if ($classification === 'regular') {
+            $query->whereNull('regulated_classification');
+        } elseif (in_array($classification, ['controlled', 'dangerous', 'mixed'], true)) {
+            $query->where('regulated_classification', $classification);
+        }
+
+        if ($search !== '') {
+            $query->where(function ($searchQuery) use ($search) {
+                $searchQuery
+                    ->where('transaction_id', 'like', '%' . $search . '%')
+                    ->orWhere('payment_method', 'like', '%' . $search . '%')
+                    ->orWhere('reference_number', 'like', '%' . $search . '%')
+                    ->orWhere('patient_name', 'like', '%' . $search . '%')
+                    ->orWhereHas('branch', fn ($branchQuery) => $branchQuery->where('branch_name', 'like', '%' . $search . '%'))
+                    ->orWhereHas('user', function ($userQuery) use ($search) {
+                        $userQuery
+                            ->where('first_name', 'like', '%' . $search . '%')
+                            ->orWhere('last_name', 'like', '%' . $search . '%');
+                    });
+            });
+        }
+
+        switch ($sort) {
+            case 'oldest':
+                $query->orderBy('created_at', 'asc')->orderBy('transaction_id', 'asc');
+                break;
+            case 'amount_desc':
+                $query->orderBy('total_amount', 'desc')->orderBy('created_at', 'desc');
+                break;
+            case 'amount_asc':
+                $query->orderBy('total_amount', 'asc')->orderBy('created_at', 'desc');
+                break;
+            case 'id_asc':
+                $query->orderBy('transaction_id', 'asc');
+                break;
+            case 'id_desc':
+                $query->orderBy('transaction_id', 'desc');
+                break;
+            default:
+                $query->orderBy('created_at', 'desc')->orderBy('transaction_id', 'desc');
+                break;
+        }
+
+        $paginated = $query->paginate($perPage);
+
+        $records = collect($paginated->items())->map(function (Transaction $transaction) {
+            return [
+                'transaction_id' => $transaction->transaction_id,
+                'branch_name' => $transaction->branch?->branch_name,
+                'cashier_name' => trim(($transaction->user?->first_name ?? '') . ' ' . ($transaction->user?->last_name ?? '')) ?: 'Unknown Cashier',
+                'payment_method' => $transaction->payment_method,
+                'reference_number' => $transaction->reference_number,
+                'transaction_type' => $transaction->transaction_type,
+                'regulated_classification' => $transaction->regulated_classification,
+                'patient_name' => $transaction->patient_name,
+                'sub_total' => (float) ($transaction->sub_total ?? 0),
+                'discount' => (float) ($transaction->discount ?? 0),
+                'total_amount' => (float) ($transaction->total_amount ?? 0),
+                'used_amount' => (float) ($transaction->used_amount ?? 0),
+                'change' => (float) ($transaction->change ?? 0),
+                'created_at' => $transaction->created_at,
+            ];
+        })->values();
+
+        return response()->json([
+            'success' => true,
+            'data' => $records,
+            'meta' => [
+                'current_page' => $paginated->currentPage(),
+                'last_page' => $paginated->lastPage(),
+                'per_page' => $paginated->perPage(),
+                'total' => $paginated->total(),
+            ],
+            'filters' => [
+                'search' => $search,
+                'payment_method' => $paymentMethod,
+                'classification' => $classification,
+                'sort' => $sort,
+            ],
+        ]);
+    }
+
     public function index(Request $request)
     {
         $site = strtolower($request->header('X-Page-Context', ''));
@@ -244,6 +351,9 @@ class TransactionController extends Controller
 
             $transaction = Transaction::create([
                 ...collect($data)->except('items')->toArray(),
+                'reference_number' => in_array(($data['payment_method'] ?? ''), ['Card', 'Gcash'], true)
+                    ? ($data['reference_number'] ?? null)
+                    : null,
                 'prescription_path' => $this->storeTransactionDocument($request, 'prescription'),
                 'member_id_image_path' => $this->storeTransactionDocument($request, 'member_id_image'),
                 'documents_submitted' => $this->documentsWereSubmitted($request, $regulatedClassification),

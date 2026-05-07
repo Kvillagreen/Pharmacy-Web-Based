@@ -11,6 +11,8 @@ use Illuminate\Http\Exceptions\HttpResponseException;
 
 class MethodTransactionRequest extends FormRequest
 {
+    private const PAYMENT_METHODS = ['Cash', 'Card', 'Gcash'];
+
     /**
      * Determine if the user is authorized to make this request.
      */
@@ -36,7 +38,8 @@ class MethodTransactionRequest extends FormRequest
             'change' => ['required', 'numeric', 'min:0'],
             'used_amount' => ['required', 'numeric', 'min:0'],
 
-            'payment_method' => ['required', 'string', 'max:50'],
+            'payment_method' => ['required', Rule::in(self::PAYMENT_METHODS)],
+            'reference_number' => ['nullable', 'string', 'max:120', 'regex:/^[A-Za-z0-9][A-Za-z0-9\\-_]{3,119}$/'],
 
             'discount' => ['required', 'numeric', 'min:0'],
             'discount_type' => ['nullable', Rule::in([
@@ -90,6 +93,8 @@ class MethodTransactionRequest extends FormRequest
         return [
             'transaction_type.required' => 'Transaction type is required.',
             'payment_method.required' => 'Payment Method is required.',
+            'payment_method.in' => 'Payment method must be Cash, Card, or Gcash.',
+            'reference_number.regex' => 'Reference number may only contain letters, numbers, hyphens, and underscores.',
             'sub_total.required' => 'Sub Total is required.',
             'change.required' => 'Change is required.',
             'used_amount.required' => 'Used Amount is required.',
@@ -103,6 +108,17 @@ class MethodTransactionRequest extends FormRequest
     public function withValidator($validator): void
     {
         $validator->after(function ($validator) {
+            $paymentMethod = (string) $this->input('payment_method', '');
+            $referenceNumber = trim((string) $this->input('reference_number', ''));
+
+            if (in_array($paymentMethod, ['Card', 'Gcash'], true) && $referenceNumber === '') {
+                $validator->errors()->add('reference_number', 'Reference number is required for card or Gcash payments.');
+            }
+
+            if ($paymentMethod === 'Cash' && $referenceNumber !== '') {
+                $validator->errors()->add('reference_number', 'Reference number is only allowed for card or Gcash payments.');
+            }
+
             $requirements = $this->regulatedRequirementsInPayload();
             if (!$requirements['has_controlled'] && !$requirements['has_dangerous']) {
                 return;
@@ -168,6 +184,29 @@ class MethodTransactionRequest extends FormRequest
                 }
             }
         });
+    }
+
+    protected function prepareForValidation(): void
+    {
+        $paymentMethod = $this->normalizePaymentMethod($this->input('payment_method'));
+        $referenceNumber = strtoupper(trim((string) $this->input('reference_number', '')));
+
+        $this->merge([
+            'payment_method' => $paymentMethod,
+            'reference_number' => in_array($paymentMethod, ['Card', 'Gcash'], true) && $referenceNumber !== '' ? $referenceNumber : null,
+        ]);
+    }
+
+    private function normalizePaymentMethod(mixed $value): string
+    {
+        $normalized = strtolower(trim((string) $value));
+
+        return match ($normalized) {
+            'cash' => 'Cash',
+            'card' => 'Card',
+            'gcash' => 'Gcash',
+            default => trim((string) $value),
+        };
     }
 
     private function regulatedRequirementsInPayload(): array
