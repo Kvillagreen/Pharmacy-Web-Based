@@ -133,6 +133,7 @@ class DashboardController extends Controller
 
             $inventorySummary = DB::table('inventories')
                 ->join('medicines', 'medicines.medicine_id', '=', 'inventories.medicine_id')
+                ->leftJoin('batches', 'inventories.batch_id', '=', 'batches.batch_id')
                 ->selectRaw(
                     'COUNT(*) as total_items,
                      COALESCE(SUM(medicines.price * inventories.stocks), 0) as inventory_value,
@@ -140,6 +141,10 @@ class DashboardController extends Controller
                      SUM(CASE WHEN inventories.stocks <= 0 THEN 1 ELSE 0 END) as out_of_stock_count'
                 )
                 ->whereIn('inventories.branch_id', $scopeBranchIds)
+                ->where(function ($statusQuery) {
+                    $statusQuery->whereNull('batches.status')
+                        ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+                })
                 ->first();
 
             $inventoryValue = (float) ($inventorySummary->inventory_value ?? 0);
@@ -149,6 +154,10 @@ class DashboardController extends Controller
             $batchSummary = Batch::query()
                 ->join('inventories', 'inventories.batch_id', '=', 'batches.batch_id')
                 ->whereIn('inventories.branch_id', $scopeBranchIds)
+                ->where(function ($statusQuery) {
+                    $statusQuery->whereNull('batches.status')
+                        ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+                })
                 ->selectRaw(
                     'COUNT(DISTINCT CASE WHEN expiry_date >= ? AND expiry_date <= ? THEN batches.batch_id END) as expiring_30_count,
                      COUNT(DISTINCT CASE WHEN expiry_date < ? THEN batches.batch_id END) as expired_count',

@@ -95,7 +95,12 @@ class FefoController extends Controller
         $inventorySummary = Inventory::query()
             ->join('branches', 'branches.branch_id', '=', 'inventories.branch_id')
             ->join('medicines', 'medicines.medicine_id', '=', 'inventories.medicine_id')
+            ->join('batches', 'batches.batch_id', '=', 'inventories.batch_id')
             ->where('branches.status', 'active')
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('batches.status')
+                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+            })
             ->when($branchId > 0, fn ($q) => $q->where('inventories.branch_id', $branchId))
             ->when($branchId <= 0 && $companyId > 0, fn ($q) => $q->where('branches.company_id', $companyId))
             ->selectRaw(
@@ -223,6 +228,11 @@ class FefoController extends Controller
         $batch = Batch::query()->findOrFail($batchId);
 
         DB::transaction(function () use ($batch) {
+            $medicineIds = Inventory::query()
+                ->where('batch_id', $batch->batch_id)
+                ->pluck('medicine_id')
+                ->unique();
+
             $batch->update([
                 'status' => 'pulled_out',
             ]);
@@ -230,6 +240,10 @@ class FefoController extends Controller
             Inventory::query()
                 ->where('batch_id', $batch->batch_id)
                 ->update(['stocks' => 0]);
+
+            foreach ($medicineIds as $medicineId) {
+                $this->syncMedicineStocks((int) $medicineId);
+            }
         });
 
         return response()->json([
@@ -261,5 +275,16 @@ class FefoController extends Controller
 
     public function destroy(string $id)
     {
+    }
+
+    private function syncMedicineStocks(int $medicineId): void
+    {
+        $totalStocks = (int) Inventory::query()
+            ->where('medicine_id', $medicineId)
+            ->sum('stocks');
+
+        DB::table('medicines')
+            ->where('medicine_id', $medicineId)
+            ->update(['stocks' => $totalStocks]);
     }
 }

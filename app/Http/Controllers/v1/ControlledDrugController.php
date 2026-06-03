@@ -110,7 +110,7 @@ class ControlledDrugController extends Controller
             })
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
-                    ->orWhereNotIn('batches.status', ['disposed']);
+                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
             })
             ->when($search !== '', function ($query) use ($search) {
                 $query->where(function ($nested) use ($search) {
@@ -151,7 +151,7 @@ class ControlledDrugController extends Controller
             })
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
-                    ->orWhereNotIn('batches.status', ['disposed']);
+                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
             })
             ->select(
                 'medicines.medicine_id',
@@ -178,7 +178,7 @@ class ControlledDrugController extends Controller
             ->whereHas('inventories', fn ($query) => $query->whereIn('branch_id', $scopeBranchIds))
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('status')
-                    ->orWhereNotIn('status', ['disposed']);
+                    ->orWhereNotIn('status', ['pulled_out', 'disposed']);
             })
             ->whereDate('expiry_date', '>=', $today)
             ->whereDate('expiry_date', '<=', $today->copy()->addDays(30))
@@ -188,7 +188,7 @@ class ControlledDrugController extends Controller
             ->whereHas('inventories', fn ($query) => $query->whereIn('branch_id', $scopeBranchIds))
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('status')
-                    ->orWhereNotIn('status', ['disposed']);
+                    ->orWhereNotIn('status', ['pulled_out', 'disposed']);
             })
             ->whereDate('expiry_date', '<', $today)
             ->count();
@@ -269,6 +269,11 @@ class ControlledDrugController extends Controller
         $batch = Batch::query()->findOrFail($batchId);
 
         DB::transaction(function () use ($batch) {
+            $medicineIds = DB::table('inventories')
+                ->where('batch_id', $batch->batch_id)
+                ->pluck('medicine_id')
+                ->unique();
+
             $batch->update([
                 'status' => 'disposed',
             ]);
@@ -276,6 +281,10 @@ class ControlledDrugController extends Controller
             DB::table('inventories')
                 ->where('batch_id', $batch->batch_id)
                 ->update(['stocks' => 0]);
+
+            foreach ($medicineIds as $medicineId) {
+                $this->syncMedicineStocks((int) $medicineId);
+            }
         });
 
         return response()->json([
@@ -303,5 +312,16 @@ class ControlledDrugController extends Controller
                 'location' => $batch->location,
             ],
         ]);
+    }
+
+    private function syncMedicineStocks(int $medicineId): void
+    {
+        $totalStocks = (int) DB::table('inventories')
+            ->where('medicine_id', $medicineId)
+            ->sum('stocks');
+
+        DB::table('medicines')
+            ->where('medicine_id', $medicineId)
+            ->update(['stocks' => $totalStocks]);
     }
 }

@@ -2,12 +2,15 @@
 
 namespace App\Http\Requests\v1;
 
+use Carbon\Carbon;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
 class MethodMedicineRequest extends FormRequest
 {
+    private const MIN_REMAINING_SHELF_LIFE_MONTHS = 12;
+
     // Allow anyone to make this request
     public function authorize(): bool
     {
@@ -33,9 +36,9 @@ class MethodMedicineRequest extends FormRequest
             'needs_protection' => ['required', 'boolean'],
             'location' => ['required', 'string'],
             'mfg_date' => ['required', 'date'],
-            'expiry_date' => ['required', 'date'],
-            'received_date' => ['required', 'date'],
-            'branch_id' => ['required', 'int', 'min:0'], // ≥ 0
+            'expiry_date' => ['required', 'date', 'after:today'],
+            'received_date' => ['required', 'date', 'after_or_equal:today'],
+            'branch_id' => ['required', 'int', 'min:1', 'exists:branches,branch_id'],
             /*
 
 
@@ -44,6 +47,48 @@ class MethodMedicineRequest extends FormRequest
             'needsProtection.required' => 'Needs Protection is required.',
             */
         ];
+    }
+
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function (Validator $validator) {
+            if ($validator->errors()->isNotEmpty()) {
+                return;
+            }
+
+            $today = Carbon::today();
+            $minimumExpiryDate = $today->copy()->addMonthsNoOverflow(self::MIN_REMAINING_SHELF_LIFE_MONTHS);
+            $mfgDate = Carbon::parse($this->input('mfg_date'))->startOfDay();
+            $receivedDate = Carbon::parse($this->input('received_date'))->startOfDay();
+            $expiryDate = Carbon::parse($this->input('expiry_date'))->startOfDay();
+
+            if ($expiryDate->lt($minimumExpiryDate)) {
+                $validator->errors()->add(
+                    'expiry_date',
+                    'Stocks with less than ' . self::MIN_REMAINING_SHELF_LIFE_MONTHS . ' months of remaining shelf life are not accepted.'
+                );
+            }
+
+            if ($mfgDate->gt($today)) {
+                $validator->errors()->add('mfg_date', 'Manufacturing date cannot be in the future.');
+            }
+
+            if ($mfgDate->gte($receivedDate)) {
+                $validator->errors()->add('mfg_date', 'Manufacturing date must be before the received date.');
+            }
+
+            if ($expiryDate->lte($mfgDate)) {
+                $validator->errors()->add('expiry_date', 'Expiry date must be after the manufacturing date.');
+            }
+
+            if ($receivedDate->gt($expiryDate)) {
+                $validator->errors()->add('received_date', 'Received date cannot be after the expiry date.');
+            }
+
+            if ($mfgDate->gt($expiryDate)) {
+                $validator->errors()->add('mfg_date', 'Manufacturing date cannot be after the expiry date.');
+            }
+        });
     }
 
     // Custom messages
@@ -63,7 +108,9 @@ class MethodMedicineRequest extends FormRequest
             'is_dangerous.required' => 'Is Dangerous is required.',
             'needs_protection.required' => 'Needs Protection is required.',
             'expiry_date.required' => 'Expiry Date is required.',
+            'expiry_date.after' => 'The system should not accept expired medicines.',
             'received_date.required' => 'Received Date is required.',
+            'received_date.after_or_equal' => 'Received date must be greater than or equal to the present date.',
             'branch_id.required' => 'Branch ID is required.',
             'mfg_date.required' => 'Manufacturing Date is required.',
             'location.required' => 'Location is required.',
@@ -73,7 +120,8 @@ class MethodMedicineRequest extends FormRequest
             'reorder_level.min' => 'Reorder Level cannot be negative.',
             'stocks.min' => 'Stocks cannot be negative.',
             'dosage.min' => 'Dosage cannot be negative.',
-            'branch_id.min' => 'Branch ID cannot be negative.',
+            'branch_id.min' => 'Please select a valid branch.',
+            'branch_id.exists' => 'Selected branch does not exist.',
 
             // Type validation messages
             'medicine_name.string' => 'Medicine Name must be a string.',

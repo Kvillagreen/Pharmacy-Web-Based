@@ -212,6 +212,10 @@ class MedicineController extends Controller
             ])
          ->where('branches.status', 'active')
         ->where('batches.expiry_date', '>', now())
+        ->where(function ($statusQuery) {
+            $statusQuery->whereNull('batches.status')
+                ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+        })
         ->orderBy('medicines.medicine_name')
         ->orderBy('batches.expiry_date', 'asc')
         ->orderBy('batches.received_date', 'asc')
@@ -252,7 +256,13 @@ class MedicineController extends Controller
         $inventorySummary = Inventory::query()
             ->join('branches', 'branches.branch_id', '=', 'inventories.branch_id')
             ->join('medicines', 'medicines.medicine_id', '=', 'inventories.medicine_id')
+            ->join('batches', 'batches.batch_id', '=', 'inventories.batch_id')
             ->where('branches.status', 'active')
+            ->whereDate('batches.expiry_date', '>', $today->toDateString())
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('batches.status')
+                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+            })
             ->when($branchId > 0, fn ($q) => $q->where('inventories.branch_id', $branchId))
             ->when($branchId <= 0 && $companyId > 0, fn ($q) => $q->where('branches.company_id', $companyId))
             ->selectRaw(
@@ -273,6 +283,10 @@ class MedicineController extends Controller
             ->join('inventories', 'inventories.batch_id', '=', 'batches.batch_id')
             ->join('branches', 'branches.branch_id', '=', 'inventories.branch_id')
             ->where('branches.status', 'active')
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('batches.status')
+                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+            })
             ->when($branchId > 0, fn ($q) => $q->where('inventories.branch_id', $branchId))
             ->when($branchId <= 0 && $companyId > 0, fn ($q) => $q->where('branches.company_id', $companyId))
             ->selectRaw(
