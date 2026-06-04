@@ -16,11 +16,11 @@ class FortmedSmsService
     {
         $response = $this->performRequest(
             'GET',
-            $this->endpoint('replies.php'),
+            $this->endpoint('history'),
             [],
             [
                 'limit' => max(1, min($limit, 100)),
-                '_ts' => now()->timestamp,
+                'offset' => 0,
             ]
         );
 
@@ -33,10 +33,16 @@ class FortmedSmsService
 
     public function sendMessage(array $payload): array
     {
+        $providerPayload = [
+            'to' => $payload['ToNumber'] ?? '',
+            'message' => $payload['MessageBody'] ?? '',
+            'slot' => (int) config('services.mysmsgate_sms.slot', 0),
+        ];
+
         $response = $this->performRequest(
             'POST',
-            $this->endpoint('messages.php'),
-            $payload
+            $this->endpoint('send'),
+            $providerPayload
         );
 
         return [
@@ -48,8 +54,8 @@ class FortmedSmsService
     public function defaults(): array
     {
         return [
-            'sender_name' => (string) config('services.fortmed_sms.sender_name', ''),
-            'from_number' => (string) config('services.fortmed_sms.from_number', ''),
+            'sender_name' => (string) config('services.mysmsgate_sms.sender_name', ''),
+            'from_number' => (string) config('services.mysmsgate_sms.from_number', ''),
         ];
     }
 
@@ -102,11 +108,15 @@ class FortmedSmsService
 
             $providerMessageId = (string) ($message['id'] ?? '');
             $providerOriginalMessageId = (string) ($message['raw']['original_message_id'] ?? $message['original_message_id'] ?? '');
+            $direction = (string) ($message['direction'] ?? 'inbound');
+            $direction = $direction === 'outbound' ? 'outbound' : 'inbound';
             $fromNumber = (string) ($message['from_number'] ?? '');
             $toNumber = (string) ($message['to_number'] ?? '');
             $normalizedFrom = $this->normalizePhoneNumber($fromNumber);
             $normalizedTo = $this->normalizePhoneNumber($toNumber);
-            $counterpartyNumber = $normalizedFrom !== '' ? $normalizedFrom : $normalizedTo;
+            $counterpartyNumber = $direction === 'outbound'
+                ? ($normalizedTo !== '' ? $normalizedTo : $normalizedFrom)
+                : ($normalizedFrom !== '' ? $normalizedFrom : $normalizedTo);
             $receivedAt = $this->parseProviderTimestamp($message['received_at'] ?? null);
 
             if ($this->shouldHideConversationMessage($counterpartyNumber, $receivedAt)) {
@@ -117,7 +127,7 @@ class FortmedSmsService
             $providerPayload = $this->normalizeProviderPayloadBody($message['raw'] ?? $message);
             $existingMessage = $providerMessageId !== ''
                 ? SmsMessage::query()
-                    ->where('direction', 'inbound')
+                    ->where('direction', $direction)
                     ->where('provider_message_id', $providerMessageId)
                     ->first()
                 : null;
@@ -129,7 +139,7 @@ class FortmedSmsService
             $existingReferenceNumber = $this->supportsExtendedSmsLogColumns() && $providerMessageId !== ''
                 ? ($existingMessage?->reference_number
                     ?? SmsMessage::query()
-                        ->where('direction', 'inbound')
+                        ->where('direction', $direction)
                         ->where('provider_message_id', $providerMessageId)
                         ->value('reference_number'))
                 : null;
@@ -138,14 +148,14 @@ class FortmedSmsService
                 'provider_original_message_id' => $providerOriginalMessageId !== '' ? $providerOriginalMessageId : null,
                 'user_id' => $userId,
                 'branch_id' => $branchId,
-                'sender_name' => (string) ($message['sender_name'] ?? ''),
+                'sender_name' => (string) ($message['sender_name'] ?? config('services.mysmsgate_sms.sender_name', '')),
                 'from_number' => $fromNumber !== '' ? $fromNumber : null,
                 'to_number' => $toNumber !== '' ? $toNumber : null,
                 'normalized_from_number' => $normalizedFrom !== '' ? $normalizedFrom : null,
                 'normalized_to_number' => $normalizedTo !== '' ? $normalizedTo : null,
                 'counterparty_number' => $counterpartyNumber !== '' ? $counterpartyNumber : null,
                 'message_body' => $decodedMessageBody,
-                'provider_received_at' => $this->parseProviderTimestamp($message['received_at'] ?? null),
+                'provider_received_at' => $receivedAt,
                 'provider_payload' => $providerPayload,
             ];
 
@@ -154,13 +164,13 @@ class FortmedSmsService
             }
 
             if ($this->supportsExtendedSmsLogColumns()) {
-                $attributes['reference_number'] = $existingReferenceNumber ?: $this->generateReferenceNumber('IN');
-                $attributes['template_tag'] = 'Incoming Reply';
+                $attributes['reference_number'] = $existingReferenceNumber ?: $this->generateReferenceNumber($direction === 'outbound' ? 'OUT' : 'IN');
+                $attributes['template_tag'] = $direction === 'outbound' ? 'Sent Reply' : 'Incoming Reply';
             }
 
             SmsMessage::updateOrCreate(
                 [
-                    'direction' => 'inbound',
+                    'direction' => $direction,
                     'provider_message_id' => $providerMessageId !== '' ? $providerMessageId : null,
                 ],
                 $attributes
@@ -336,12 +346,19 @@ class FortmedSmsService
     {
         return collect($messages)
             ->filter(function (array $message) {
+                $direction = (string) ($message['direction'] ?? 'inbound');
                 $counterparty = $this->normalizePhoneNumber(
-                    (string) ($message['normalized_from_number']
-                        ?? $message['from_number']
-                        ?? $message['normalized_to_number']
-                        ?? $message['to_number']
-                        ?? '')
+                    $direction === 'outbound'
+                        ? (string) ($message['normalized_to_number']
+                            ?? $message['to_number']
+                            ?? $message['normalized_from_number']
+                            ?? $message['from_number']
+                            ?? '')
+                        : (string) ($message['normalized_from_number']
+                            ?? $message['from_number']
+                            ?? $message['normalized_to_number']
+                            ?? $message['to_number']
+                            ?? '')
                 );
                 $receivedAt = $message['received_at'] ?? null;
 
@@ -357,7 +374,7 @@ class FortmedSmsService
         return Http::acceptJson()
             ->contentType('application/json')
             ->withHeaders([
-                'X-API-Key' => (string) config('services.fortmed_sms.api_key'),
+                'Authorization' => $this->authorizationHeader(),
                 'Cache-Control' => 'no-cache, no-store, must-revalidate',
                 'Pragma' => 'no-cache',
                 'Expires' => '0',
@@ -377,7 +394,7 @@ class FortmedSmsService
 
     private function endpoint(string $path): string
     {
-        return rtrim((string) config('services.fortmed_sms.base_url'), '/') . '/' . ltrim($path, '/');
+        return rtrim((string) config('services.mysmsgate_sms.base_url'), '/') . '/' . ltrim($path, '/');
     }
 
     private function performRequest(string $method, string $url, array $payload = [], array $query = []): array
@@ -392,7 +409,7 @@ class FortmedSmsService
                 'decoded' => $this->decodeBody($response->body()),
             ];
         } catch (\Throwable $exception) {
-            \Log::warning('FortMed HTTP client request failed. Falling back to cURL.', [
+            \Log::warning('SMS gateway HTTP client request failed. Falling back to cURL.', [
                 'method' => $method,
                 'url' => $url,
                 'error' => $exception->getMessage(),
@@ -405,7 +422,7 @@ class FortmedSmsService
     private function curlRequest(string $method, string $url, array $payload = [], array $query = []): array
     {
         if (!function_exists('curl_init')) {
-            throw new \RuntimeException('cURL extension is required for FortMed SMS requests.');
+            throw new \RuntimeException('cURL extension is required for SMS gateway requests.');
         }
 
         $queryString = http_build_query(array_filter($query, fn ($value) => $value !== null && $value !== ''));
@@ -418,7 +435,7 @@ class FortmedSmsService
             'Cache-Control: no-cache, no-store, must-revalidate',
             'Pragma: no-cache',
             'Expires: 0',
-            'X-API-Key: ' . (string) config('services.fortmed_sms.api_key'),
+            'Authorization: ' . $this->authorizationHeader(),
         ];
 
         curl_setopt_array($ch, [
@@ -444,7 +461,7 @@ class FortmedSmsService
         curl_close($ch);
 
         if ($body === false) {
-            throw new \RuntimeException($error !== '' ? $error : 'Unknown cURL error while contacting FortMed SMS.');
+            throw new \RuntimeException($error !== '' ? $error : 'Unknown cURL error while contacting SMS gateway.');
         }
 
         return [
@@ -469,6 +486,14 @@ class FortmedSmsService
         return $body;
     }
 
+    private function authorizationHeader(): string
+    {
+        $token = trim((string) config('services.mysmsgate_sms.api_token', ''));
+        $token = preg_replace('/^Bearer\s+/i', '', $token) ?? $token;
+
+        return 'Bearer ' . trim($token);
+    }
+
     private function normalizeReplies(mixed $payload): array
     {
         $records = [];
@@ -477,7 +502,7 @@ class FortmedSmsService
             if ($this->isList($payload)) {
                 $records = $payload;
             } else {
-                foreach (['data', 'replies', 'messages', 'items', 'results'] as $key) {
+                foreach (['history', 'data', 'replies', 'messages', 'items', 'results'] as $key) {
                     if (isset($payload[$key]) && is_array($payload[$key])) {
                         $records = $payload[$key];
                         break;
@@ -489,16 +514,39 @@ class FortmedSmsService
         return collect($records)
             ->filter(fn ($record) => is_array($record))
             ->map(function (array $record) {
-                $fromNumber = $record['FromNumber'] ?? $record['from_number'] ?? $record['from'] ?? $record['mobile'] ?? '';
-                $toNumber = $record['ToNumber'] ?? $record['to_number'] ?? $record['to'] ?? '';
+                $fromNumber = $record['FromNumber'] ?? $record['from_number'] ?? $record['phone_from'] ?? $record['from'] ?? $record['mobile'] ?? '';
+                $toNumber = $record['ToNumber'] ?? $record['to_number'] ?? $record['phone_to'] ?? $record['to'] ?? '';
                 $messageBody = $record['MessageBody'] ?? $record['message_body'] ?? $record['message'] ?? $record['body'] ?? '';
-                $receivedAt = $record['ReceivedAt'] ?? $record['received_at'] ?? $record['created_at'] ?? $record['date'] ?? null;
+                $receivedAt = $record['ReceivedAt'] ?? $record['received_at'] ?? $record['created_at'] ?? $record['sent_at'] ?? $record['date'] ?? null;
+                $defaultFromNumber = (string) config('services.mysmsgate_sms.from_number', '');
+                $normalizedDefaultFrom = $this->normalizePhoneNumber((string) config('services.mysmsgate_sms.from_number', ''));
+                $decodedMessageBody = $this->decodeStoredMessageText((string) $messageBody);
+                $providerDirection = strtolower((string) ($record['direction'] ?? ''));
+                $status = strtolower((string) ($record['status'] ?? ''));
+                $normalizedInitialFrom = $this->normalizePhoneNumber((string) $fromNumber);
+                $direction = match ($providerDirection) {
+                    'out', 'outbound' => 'outbound',
+                    'in', 'inbound', 'incoming', 'received' => 'inbound',
+                    default => ($normalizedDefaultFrom !== '' && $normalizedInitialFrom === $normalizedDefaultFrom)
+                        || in_array($status, ['queued', 'pending', 'delivered', 'failed'], true)
+                            ? 'outbound'
+                            : 'inbound',
+                };
+
+                if ($direction === 'inbound' && trim((string) $toNumber) === '') {
+                    $toNumber = $defaultFromNumber;
+                }
+
+                if ($direction === 'outbound' && trim((string) $fromNumber) === '') {
+                    $fromNumber = $defaultFromNumber;
+                }
+
                 $normalizedFrom = $this->normalizePhoneNumber((string) $fromNumber);
                 $normalizedTo = $this->normalizePhoneNumber((string) $toNumber);
-                $decodedMessageBody = $this->decodeStoredMessageText((string) $messageBody);
 
                 return [
-                    'id' => $record['ReplyID'] ?? $record['reply_id'] ?? $record['id'] ?? md5(json_encode($record)),
+                    'id' => $record['ReplyID'] ?? $record['reply_id'] ?? $record['sms_id'] ?? $record['id'] ?? md5(json_encode($record)),
+                    'direction' => $direction,
                     'from_number' => (string) $fromNumber,
                     'to_number' => (string) $toNumber,
                     'display_from_number' => $this->formatDisplayPhoneNumber((string) $fromNumber),
@@ -506,7 +554,7 @@ class FortmedSmsService
                     'normalized_from_number' => $normalizedFrom,
                     'normalized_to_number' => $normalizedTo,
                     'message_body' => $decodedMessageBody,
-                    'sender_name' => (string) ($record['SenderName'] ?? $record['sender_name'] ?? ''),
+                    'sender_name' => (string) ($record['SenderName'] ?? $record['sender_name'] ?? config('services.mysmsgate_sms.sender_name', '')),
                     'received_at' => $receivedAt,
                     'raw' => $this->normalizeProviderPayloadBody($record),
                 ];

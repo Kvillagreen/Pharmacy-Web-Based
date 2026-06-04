@@ -34,26 +34,48 @@ class SmsController extends Controller
             if (!empty($result['messages'])) {
                 $result['messages'] = $this->smsService->filterDeletedConversationMessages($result['messages']);
             }
+
+            if ($result['status'] >= 400) {
+                return $this->response(false, 'Unable to load SMS replies from the SMS gateway.', [
+                    'messages' => [],
+                    'summary' => [
+                        'conversations' => [],
+                        'total_messages' => 0,
+                        'unique_customers' => 0,
+                    ],
+                    'defaults' => $this->smsService->defaults(),
+                    'provider_response' => $result['raw'],
+                ], 502);
+            }
+
             $storedConversations = $this->smsService->getStoredConversations($limit);
 
-            if ($result['status'] < 400) {
-                $this->smsService->syncInboundMessages($result['messages'], $userId, $branchId);
-                $storedConversations = $this->smsService->getStoredConversations($limit);
-            }
+            $this->smsService->syncInboundMessages($result['messages'], $userId, $branchId);
+            $storedConversations = $this->smsService->getStoredConversations($limit);
 
             if (!empty($result['messages']) && empty($storedConversations['conversations'])) {
                 $fallbackMessages = collect($result['messages'])
-                    ->groupBy(fn (array $message) => (string) ($message['normalized_from_number'] ?? $message['from_number'] ?? 'unknown'))
+                    ->groupBy(function (array $message) {
+                        $direction = (string) ($message['direction'] ?? 'inbound');
+
+                        return (string) ($direction === 'outbound'
+                            ? ($message['normalized_to_number'] ?? $message['to_number'] ?? 'unknown')
+                            : ($message['normalized_from_number'] ?? $message['from_number'] ?? 'unknown'));
+                    })
                     ->map(function ($conversation, $customerNumber) {
                         $latest = collect($conversation)->sortByDesc('received_at')->first();
+                        $latestDirection = (string) ($latest['direction'] ?? 'inbound');
+                        $latestCustomerNumber = $latestDirection === 'outbound'
+                            ? ($latest['display_to_number'] ?? $latest['to_number'] ?? '')
+                            : ($latest['display_from_number'] ?? $latest['from_number'] ?? '');
                         $history = collect($conversation)
                             ->sortBy('received_at')
                             ->values()
                             ->map(fn (array $message) => [
                                 'id' => $message['id'] ?? null,
                                 'reference_number' => null,
-                                'template_tag' => 'Incoming Reply',
-                                'direction' => 'inbound',
+                                'template_tag' => ($message['direction'] ?? 'inbound') === 'outbound' ? 'Sent Reply' : 'Incoming Reply',
+                                'direction' => $message['direction'] ?? 'inbound',
                                 'from_number' => $message['display_from_number'] ?? $message['from_number'] ?? '',
                                 'to_number' => $message['display_to_number'] ?? $message['to_number'] ?? '',
                                 'normalized_from_number' => $message['normalized_from_number'] ?? '',
@@ -66,12 +88,12 @@ class SmsController extends Controller
 
                         return [
                             'id' => 'conversation-' . ($customerNumber ?: ($latest['id'] ?? 'unknown')),
-                            'from_number' => $latest['display_from_number'] ?? $latest['from_number'] ?? '',
+                            'from_number' => $latestCustomerNumber,
                             'to_number' => $latest['display_to_number'] ?? $latest['to_number'] ?? '',
-                            'reply_to_number' => $latest['display_from_number'] ?? $latest['from_number'] ?? '',
+                            'reply_to_number' => $latestCustomerNumber,
                             'normalized_customer_number' => $customerNumber,
                             'reference_number' => null,
-                            'template_tag' => 'Incoming Reply',
+                            'template_tag' => $latestDirection === 'outbound' ? 'Sent Reply' : 'Incoming Reply',
                             'message_body' => $latest['message_body'] ?? '',
                             'sender_name' => $latest['sender_name'] ?? '',
                             'received_at' => $latest['received_at'] ?? null,
@@ -91,15 +113,6 @@ class SmsController extends Controller
                     'total_messages' => count($result['messages']),
                     'unique_customers' => count($fallbackMessages),
                 ];
-            }
-
-            if ($result['status'] >= 400 && empty($storedConversations['conversations'])) {
-                return $this->response(false, 'Unable to load SMS replies.', [
-                    'messages' => $storedConversations['conversations'],
-                    'summary' => $storedConversations,
-                    'defaults' => $this->smsService->defaults(),
-                    'provider_response' => $result['raw'],
-                ], 502);
             }
 
             return $this->response(true, 'SMS replies loaded successfully.', [

@@ -35,11 +35,12 @@ return [
         ],
     ],
 
-    'fortmed_sms' => [
-        'base_url' => env('FORTMED_SMS_BASE_URL', 'https://fortmed.org/web/FMCSMS/api'),
-        'api_key' => env('FORTMED_SMS_API_KEY'),
-        'sender_name' => env('FORTMED_SMS_SENDER_NAME', env('APP_NAME', 'Pharmacy Web')),
-        'from_number' => env('FORTMED_SMS_FROM_NUMBER'),
+    'mysmsgate_sms' => [
+        'base_url' => env('SMS_BASE_API_URL', 'https://mysmsgate.net/api/v1'),
+        'api_token' => env('SMS_API_KEY'),
+        'sender_name' => env('SMS_SENDER_NAME', env('FORTMED_SMS_SENDER_NAME', env('APP_NAME', 'Pharmacy Web'))),
+        'from_number' => env('SMS_FROM_NUMBER', env('FORTMED_SMS_FROM_NUMBER')),
+        'slot' => env('SMS_SLOT', 0),
     ],
 
 ];
