@@ -66,14 +66,8 @@ class FortmedSmsService
         $raw = is_array($probe['raw']) ? $probe['raw'] : ['response' => $probe['raw']];
 
         return [
-            'config' => [
-                'base_url' => (string) config('services.mysmsgate_sms.base_url', ''),
-                'api_key_configured' => $token !== '' && $token !== 'YOUR_MYSMSGATE_API_KEY',
-                'api_key_length' => strlen($token),
-                'sender_name' => (string) config('services.mysmsgate_sms.sender_name', ''),
-                'from_number' => (string) config('services.mysmsgate_sms.from_number', ''),
-                'slot' => (int) config('services.mysmsgate_sms.slot', 0),
-            ],
+            'config' => $this->debugConfig(),
+            'database' => $this->debugDatabase(),
             'provider' => [
                 'status' => $probe['status'],
                 'success' => $probe['status'] < 400,
@@ -82,6 +76,14 @@ class FortmedSmsService
                 'history_count' => isset($raw['history']) && is_array($raw['history']) ? count($raw['history']) : null,
                 'response_keys' => array_keys($raw),
             ],
+        ];
+    }
+
+    public function debugContext(): array
+    {
+        return [
+            'config' => $this->debugConfig(),
+            'database' => $this->debugDatabase(),
         ];
     }
 
@@ -552,6 +554,67 @@ class FortmedSmsService
         $token = trim((string) config('services.mysmsgate_sms.api_token', ''));
 
         return trim(preg_replace('/^Bearer\s+/i', '', $token) ?? $token);
+    }
+
+    private function debugConfig(): array
+    {
+        $token = $this->apiToken();
+
+        return [
+            'base_url' => (string) config('services.mysmsgate_sms.base_url', ''),
+            'api_key_configured' => $token !== '' && $token !== 'YOUR_MYSMSGATE_API_KEY',
+            'api_key_length' => strlen($token),
+            'sender_name' => (string) config('services.mysmsgate_sms.sender_name', ''),
+            'from_number' => (string) config('services.mysmsgate_sms.from_number', ''),
+            'slot' => (int) config('services.mysmsgate_sms.slot', 0),
+        ];
+    }
+
+    private function debugDatabase(): array
+    {
+        $columns = [
+            'sms_message_id',
+            'reference_number',
+            'template_tag',
+            'direction',
+            'provider_message_id',
+            'provider_original_message_id',
+            'user_id',
+            'branch_id',
+            'sender_name',
+            'from_number',
+            'to_number',
+            'normalized_from_number',
+            'normalized_to_number',
+            'counterparty_number',
+            'message_body',
+            'provider_received_at',
+            'provider_payload',
+            'is_deleted',
+        ];
+
+        try {
+            $hasTable = Schema::hasTable('sms_messages');
+
+            return [
+                'connection' => (string) config('database.default'),
+                'sms_messages_table' => $hasTable,
+                'columns' => $hasTable
+                    ? collect($columns)
+                        ->mapWithKeys(fn (string $column) => [$column => Schema::hasColumn('sms_messages', $column)])
+                        ->all()
+                    : [],
+            ];
+        } catch (\Throwable $exception) {
+            return [
+                'connection' => (string) config('database.default'),
+                'sms_messages_table' => false,
+                'error' => [
+                    'type' => class_basename($exception),
+                    'message' => $exception->getMessage(),
+                ],
+            ];
+        }
     }
 
     private function normalizeReplies(mixed $payload): array

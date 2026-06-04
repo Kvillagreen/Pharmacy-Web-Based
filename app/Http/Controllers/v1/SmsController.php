@@ -44,6 +44,7 @@ class SmsController extends Controller
                         'unique_customers' => 0,
                     ],
                     'defaults' => $this->smsService->defaults(),
+                    'debug' => $this->smsService->debugContext(),
                     'error' => [
                         'operation' => 'sms_history_fetch',
                         'provider_status' => $result['status'],
@@ -92,6 +93,7 @@ class SmsController extends Controller
                 'messages' => $storedConversations['conversations'],
                 'summary' => $storedConversations,
                 'defaults' => $this->smsService->defaults(),
+                'debug' => $this->smsService->debugContext(),
                 'error' => $databaseError,
                 'provider_response' => $result['raw'],
             ]);
@@ -103,6 +105,7 @@ class SmsController extends Controller
             return $this->response(false, 'Unable to load SMS replies.', [
                 'messages' => [],
                 'defaults' => $this->smsService->defaults(),
+                'debug' => $this->smsService->debugContext(),
                 'error' => [
                     'operation' => 'sms_history_fetch',
                     'type' => class_basename($e),
