@@ -399,12 +399,17 @@ class FortmedSmsService
 
     private function request()
     {
-        return Http::acceptJson()
+        return Http::withHeaders([
+                'Accept' => 'application/json, text/plain, */*',
+            ])
             ->contentType('application/json')
             ->withHeaders([
                 'Authorization' => $this->authorizationHeader(),
-                'User-Agent' => (string) config('services.mysmsgate_sms.user_agent', 'curl/8.5.0'),
+                'User-Agent' => (string) config('services.mysmsgate_sms.user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'),
                 'Accept-Language' => 'en-US,en;q=0.9',
+                'Accept-Encoding' => 'gzip, deflate, br',
+                'Referer' => 'https://mysmsgate.net/',
+                'Origin' => 'https://mysmsgate.net',
                 'X-Requested-With' => 'XMLHttpRequest',
                 'Cache-Control' => 'no-cache, no-store, must-revalidate',
                 'Pragma' => 'no-cache',
@@ -495,13 +500,16 @@ class FortmedSmsService
 
         $headers = [
             'Content-Type: application/json',
-            'Accept: application/json',
+            'Accept: application/json, text/plain, */*',
+            'Accept-Encoding: gzip, deflate, br',
+            'Accept-Language: en-US,en;q=0.9',
+            'Referer: https://mysmsgate.net/',
+            'Origin: https://mysmsgate.net',
             'Cache-Control: no-cache, no-store, must-revalidate',
             'Pragma: no-cache',
             'Expires: 0',
             'Authorization: ' . $this->authorizationHeader(),
-            'User-Agent: ' . (string) config('services.mysmsgate_sms.user_agent', 'curl/8.5.0'),
-            'Accept-Language: en-US,en;q=0.9',
+            'User-Agent: ' . (string) config('services.mysmsgate_sms.user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'),
             'X-Requested-With: XMLHttpRequest',
         ];
 
@@ -513,6 +521,7 @@ class FortmedSmsService
             CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_SSL_VERIFYHOST => 0,
             CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_ENCODING => '',
             CURLOPT_PROXY => '',
             CURLOPT_NOPROXY => '*',
         ]);

@@ -42,7 +42,7 @@ return [
         'sender_name' => env('SMS_SENDER_NAME', env('FORTMED_SMS_SENDER_NAME', env('APP_NAME', 'Pharmacy Web'))),
         'from_number' => env('SMS_FROM_NUMBER', env('FORTMED_SMS_FROM_NUMBER')),
         'slot' => env('SMS_SLOT', 0),
-        'user_agent' => env('SMS_REQUEST_USER_AGENT', 'curl/8.5.0'),
+        'user_agent' => env('SMS_REQUEST_USER_AGENT', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'),
     ],
 
 ];
