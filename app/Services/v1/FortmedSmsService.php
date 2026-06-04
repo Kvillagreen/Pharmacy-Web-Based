@@ -403,6 +403,9 @@ class FortmedSmsService
             ->contentType('application/json')
             ->withHeaders([
                 'Authorization' => $this->authorizationHeader(),
+                'User-Agent' => (string) config('services.mysmsgate_sms.user_agent', 'curl/8.5.0'),
+                'Accept-Language' => 'en-US,en;q=0.9',
+                'X-Requested-With' => 'XMLHttpRequest',
                 'Cache-Control' => 'no-cache, no-store, must-revalidate',
                 'Pragma' => 'no-cache',
                 'Expires' => '0',
@@ -422,7 +425,10 @@ class FortmedSmsService
 
     private function endpoint(string $path): string
     {
-        return rtrim((string) config('services.mysmsgate_sms.base_url'), '/') . '/' . ltrim($path, '/');
+        $baseUrl = trim((string) config('services.mysmsgate_sms.proxy_url', ''))
+            ?: (string) config('services.mysmsgate_sms.base_url');
+
+        return rtrim($baseUrl, '/') . '/' . ltrim($path, '/');
     }
 
     private function performRequest(string $method, string $url, array $payload = [], array $query = []): array
@@ -494,6 +500,9 @@ class FortmedSmsService
             'Pragma: no-cache',
             'Expires: 0',
             'Authorization: ' . $this->authorizationHeader(),
+            'User-Agent: ' . (string) config('services.mysmsgate_sms.user_agent', 'curl/8.5.0'),
+            'Accept-Language: en-US,en;q=0.9',
+            'X-Requested-With: XMLHttpRequest',
         ];
 
         curl_setopt_array($ch, [
@@ -536,12 +545,33 @@ class FortmedSmsService
             return '';
         }
 
+        if ($this->looksLikeCloudflareChallenge($body)) {
+            return [
+                'success' => false,
+                'message' => 'SMS gateway request was blocked by Cloudflare before reaching the API.',
+                'error' => [
+                    'type' => 'cloudflare_challenge',
+                    'hint' => 'Laravel Cloud outbound IP is being challenged. Configure SMS_PROXY_URL or ask MySmsGate to whitelist the server/API path.',
+                ],
+            ];
+        }
+
         $decoded = json_decode($body, true);
         if (json_last_error() === JSON_ERROR_NONE) {
             return $decoded;
         }
 
         return $body;
+    }
+
+    private function looksLikeCloudflareChallenge(string $body): bool
+    {
+        $lower = strtolower($body);
+
+        return str_contains($lower, 'just a moment')
+            || str_contains($lower, 'cf-browser-verification')
+            || str_contains($lower, 'challenge-platform')
+            || str_contains($lower, 'cloudflare');
     }
 
     private function authorizationHeader(): string
