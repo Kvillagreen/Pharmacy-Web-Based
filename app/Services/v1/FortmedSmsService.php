@@ -59,6 +59,32 @@ class FortmedSmsService
         ];
     }
 
+    public function diagnostics(): array
+    {
+        $token = $this->apiToken();
+        $probe = $this->fetchReplies(1);
+        $raw = is_array($probe['raw']) ? $probe['raw'] : ['response' => $probe['raw']];
+
+        return [
+            'config' => [
+                'base_url' => (string) config('services.mysmsgate_sms.base_url', ''),
+                'api_key_configured' => $token !== '' && $token !== 'YOUR_MYSMSGATE_API_KEY',
+                'api_key_length' => strlen($token),
+                'sender_name' => (string) config('services.mysmsgate_sms.sender_name', ''),
+                'from_number' => (string) config('services.mysmsgate_sms.from_number', ''),
+                'slot' => (int) config('services.mysmsgate_sms.slot', 0),
+            ],
+            'provider' => [
+                'status' => $probe['status'],
+                'success' => $probe['status'] < 400,
+                'message' => $raw['message'] ?? null,
+                'total' => $raw['total'] ?? null,
+                'history_count' => isset($raw['history']) && is_array($raw['history']) ? count($raw['history']) : null,
+                'response_keys' => array_keys($raw),
+            ],
+        ];
+    }
+
     public function normalizePhoneNumber(?string $number): string
     {
         $digits = preg_replace('/\D+/', '', (string) $number);
@@ -399,6 +425,16 @@ class FortmedSmsService
 
     private function performRequest(string $method, string $url, array $payload = [], array $query = []): array
     {
+        if ($this->apiToken() === '') {
+            return [
+                'status' => 503,
+                'decoded' => [
+                    'success' => false,
+                    'message' => 'SMS_API_KEY is not configured.',
+                ],
+            ];
+        }
+
         try {
             $response = strtoupper($method) === 'POST'
                 ? $this->request()->post($url, $payload)
@@ -415,7 +451,27 @@ class FortmedSmsService
                 'error' => $exception->getMessage(),
             ]);
 
-            return $this->curlRequest($method, $url, $payload, $query);
+            try {
+                return $this->curlRequest($method, $url, $payload, $query);
+            } catch (\Throwable $curlException) {
+                \Log::error('SMS gateway cURL fallback request failed.', [
+                    'method' => $method,
+                    'url' => $url,
+                    'error' => $curlException->getMessage(),
+                ]);
+
+                return [
+                    'status' => 503,
+                    'decoded' => [
+                        'success' => false,
+                        'message' => 'SMS gateway request failed.',
+                        'error' => [
+                            'type' => class_basename($curlException),
+                            'message' => $curlException->getMessage(),
+                        ],
+                    ],
+                ];
+            }
         }
     }
 
@@ -488,10 +544,14 @@ class FortmedSmsService
 
     private function authorizationHeader(): string
     {
-        $token = trim((string) config('services.mysmsgate_sms.api_token', ''));
-        $token = preg_replace('/^Bearer\s+/i', '', $token) ?? $token;
+        return 'Bearer ' . $this->apiToken();
+    }
 
-        return 'Bearer ' . trim($token);
+    private function apiToken(): string
+    {
+        $token = trim((string) config('services.mysmsgate_sms.api_token', ''));
+
+        return trim(preg_replace('/^Bearer\s+/i', '', $token) ?? $token);
     }
 
     private function normalizeReplies(mixed $payload): array
