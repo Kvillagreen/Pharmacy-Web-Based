@@ -23,6 +23,10 @@ class DashboardController extends Controller
     {
         $companyId = (int) $request->input('company_id', 0);
         $branchId = (int) $request->input('branch_id', 0);
+        $authUser = $request->user();
+        if ($authUser && !in_array($authUser->role, ['admin', 'owner', 'super_admin'], true)) {
+            $branchId = (int) $authUser->branch_id;
+        }
         $days = max(7, min((int) $request->input('days', 30), 90));
         $cacheKey = $this->buildCacheKey($companyId, $branchId, $days);
 
@@ -352,7 +356,7 @@ class DashboardController extends Controller
         if ($revenueTrend > 8) {
             $headline = 'Revenue is trending upward over the selected period.';
         } elseif ($revenueTrend < -8) {
-            $headline = 'Revenue is softer than the previous period and needs attention.';
+            $headline = 'Revenue is softer in the selected period and needs attention.';
         }
 
         $highlights = [];

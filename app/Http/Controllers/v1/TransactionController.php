@@ -23,6 +23,10 @@ class TransactionController extends Controller
     {
         $companyId = (int) $request->input('company_id', 0);
         $branchId = (int) $request->input('branch_id', 0);
+        $authUser = $request->user();
+        if ($authUser && !in_array($authUser->role, ['admin', 'owner', 'super_admin'], true)) {
+            $branchId = (int) $authUser->branch_id;
+        }
         $perPage = max(5, min((int) $request->input('per_page', 10), 50));
         $search = trim((string) $request->input('search', ''));
         $paymentMethod = trim((string) $request->input('payment_method', ''));
@@ -156,6 +160,7 @@ class TransactionController extends Controller
                 'medicines.is_dangerous',
                 'medicines.needs_protection',
                 'batches.batch_id',
+                'batches.batch_number',
                 'batches.expiry_date',
                 'batches.received_date',
                 'batches.status as batch_status',
@@ -322,10 +327,13 @@ class TransactionController extends Controller
                     'inventories.batch_id',
                     'inventories.stocks',
                     'medicines.medicine_name',
+                    'medicines.price',
                     'medicines.is_dangerous',
                     'medicines.needs_protection',
+                    'batches.batch_number',
                     'batches.expiry_date',
                     'batches.received_date',
+                    'batches.mfg_date',
                 ])
                 ->groupBy('medicine_id');
 
@@ -372,18 +380,6 @@ class TransactionController extends Controller
             ]);
 
             $transactionItems = [];
-            foreach ($data['items'] as $item) {
-                $transactionItems[] = [
-                    'transaction_id' => $transaction->transaction_id,
-                    'medicine_id' => $item['medicine_id'],
-                    'quantity' => $item['quantity'],
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ];
-            }
-
-            TransactionItem::insert($transactionItems);
-
             foreach ($requestedQuantities as $medicineId => $quantity) {
                 $remainingToDeduct = (int) $quantity;
                 $inventoryBatches = $inventoryRows->get($medicineId, collect());
@@ -400,6 +396,18 @@ class TransactionController extends Controller
 
                     $deductedStocks = min($availableStocks, $remainingToDeduct);
                     $newStocks = $availableStocks - $deductedStocks;
+                    $transactionItems[] = [
+                        'transaction_id' => $transaction->transaction_id,
+                        'medicine_id' => (int) $medicineId,
+                        'batch_id' => $inventoryBatch->batch_id,
+                        'batch_number' => $inventoryBatch->batch_number,
+                        'expiry_date' => $inventoryBatch->expiry_date,
+                        'mfg_date' => $inventoryBatch->mfg_date,
+                        'quantity' => $deductedStocks,
+                        'price' => $inventoryBatch->price,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ];
 
                     Inventory::query()
                         ->where('inventory_id', $inventoryBatch->inventory_id)
@@ -416,7 +424,15 @@ class TransactionController extends Controller
                 $this->syncMedicineStocks((int) $medicineId);
             }
 
-            $transaction->load(['items.medicine', 'branch:branch_id,branch_name', 'user:user_id,first_name,last_name', 'regulatedCustomer']);
+            TransactionItem::insert($transactionItems);
+
+            $transaction->load([
+                'items.medicine',
+                'items.batch:batch_id,batch_number,expiry_date,mfg_date',
+                'branch:branch_id,branch_name,branch_address,branch_contact',
+                'user:user_id,first_name,last_name',
+                'regulatedCustomer',
+            ]);
 
             $this->createTransactionNotifications($transaction);
 
@@ -448,7 +464,8 @@ class TransactionController extends Controller
         $transaction = Transaction::query()
             ->with([
                 'items.medicine',
-                'branch:branch_id,branch_name',
+                'items.batch:batch_id,batch_number,expiry_date,mfg_date',
+                'branch:branch_id,branch_name,branch_address,branch_contact',
                 'user:user_id,first_name,last_name',
                 'regulatedCustomer',
             ])

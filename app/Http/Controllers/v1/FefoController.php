@@ -44,6 +44,7 @@ class FefoController extends Controller
                 'medicines.is_dangerous',
                 'medicines.needs_protection',
                 'batches.batch_id',
+                'batches.batch_number',
                 'batches.expiry_date',
                 'batches.received_date',
                 'batches.status as batch_status',

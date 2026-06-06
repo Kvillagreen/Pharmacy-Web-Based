@@ -5,6 +5,7 @@ namespace App\Http\Controllers\v1;
 use App\Http\Controllers\Controller;
 use App\Models\v1\Batch;
 use App\Models\v1\Branch;
+use App\Models\v1\InventoryTransfer;
 use App\Models\v1\Medicine;
 use App\Models\v1\Transaction;
 use Carbon\Carbon;
@@ -17,11 +18,39 @@ class ReportController extends Controller
     {
         $companyId = (int) $request->input('company_id', 0);
         $branchId = (int) $request->input('branch_id', 0);
-        $days = max(7, min((int) $request->input('days', 30), 90));
-
+        $authUser = $request->user();
+        if ($authUser && !in_array($authUser->role, ['admin', 'owner', 'super_admin'], true)) {
+            $branchId = (int) $authUser->branch_id;
+        }
         $today = Carbon::today();
-        $rangeStart = $today->copy()->subDays($days - 1)->startOfDay();
-        $rangeEnd = $today->copy()->endOfDay();
+        $days = max(7, min((int) $request->input('days', 30), 90));
+        $startDate = $request->input('start_date');
+        $endDate = $request->input('end_date');
+
+        if (!empty($startDate) || !empty($endDate)) {
+            if (empty($startDate) || empty($endDate)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Start date and end date are both required for report date filtering.',
+                ], 422);
+            }
+
+            $rangeStart = Carbon::parse($startDate)->startOfDay();
+            $rangeEnd = Carbon::parse($endDate)->endOfDay();
+
+            if ($rangeStart->gt($rangeEnd)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Start date must be earlier than or equal to end date.',
+                ], 422);
+            }
+
+            $days = $rangeStart->diffInDays($rangeEnd) + 1;
+        } else {
+            $rangeStart = $today->copy()->subDays($days - 1)->startOfDay();
+            $rangeEnd = $today->copy()->endOfDay();
+        }
+
         $previousStart = $rangeStart->copy()->subDays($days);
         $previousEnd = $rangeStart->copy()->subDay()->endOfDay();
 
@@ -47,6 +76,8 @@ class ReportController extends Controller
                         'company_id' => $companyId,
                         'branch_id' => $branchId,
                         'days' => $days,
+                        'start_date' => $rangeStart->toDateString(),
+                        'end_date' => $rangeEnd->toDateString(),
                         'label' => $scopeLabel,
                     ],
                     'summary' => [
@@ -75,6 +106,7 @@ class ReportController extends Controller
                         'recent_transactions' => [],
                         'prescribed_transactions' => [],
                         'dangerous_transactions' => [],
+                        'stock_transfers' => [],
                     ],
                     'analysis' => [
                         'headline' => 'No report data is available for the selected scope yet.',
@@ -226,8 +258,15 @@ class ReportController extends Controller
                     ->whereBetween('transactions.created_at', [$rangeStart, $rangeEnd]);
             })
             ->where('branches.status', 'active')
-            ->when($companyId > 0, fn ($query) => $query->where('branches.company_id', $companyId))
-            ->selectRaw('branches.branch_id, branches.branch_name, COALESCE(SUM(transactions.total_amount), 0) as total_revenue, COUNT(transactions.transaction_id) as transaction_count')
+            ->whereIn('branches.branch_id', $scopeBranchIds)
+            ->selectRaw('
+                branches.branch_id,
+                branches.branch_name,
+                COALESCE(SUM(transactions.total_amount), 0) as total_revenue,
+                COUNT(transactions.transaction_id) as transaction_count,
+                MIN(transactions.created_at) as first_created_at,
+                MAX(transactions.created_at) as last_created_at
+            ')
             ->groupBy('branches.branch_id', 'branches.branch_name')
             ->orderByDesc('total_revenue')
             ->get()
@@ -236,13 +275,24 @@ class ReportController extends Controller
                 'branch_name' => $row->branch_name,
                 'total_revenue' => (float) $row->total_revenue,
                 'transaction_count' => (int) $row->transaction_count,
+                'first_created_at' => $row->first_created_at,
+                'last_created_at' => $row->last_created_at,
             ])
             ->values();
 
         $topMedicines = DB::table('transaction_items')
             ->join('transactions', 'transaction_items.transaction_id', '=', 'transactions.transaction_id')
             ->join('medicines', 'transaction_items.medicine_id', '=', 'medicines.medicine_id')
-            ->selectRaw('medicines.medicine_id, medicines.medicine_name, medicines.generic_name, medicines.category, SUM(transaction_items.quantity) as quantity_sold, COUNT(DISTINCT transactions.transaction_id) as transactions_count')
+            ->selectRaw('
+                medicines.medicine_id,
+                medicines.medicine_name,
+                medicines.generic_name,
+                medicines.category,
+                SUM(transaction_items.quantity) as quantity_sold,
+                COUNT(DISTINCT transactions.transaction_id) as transactions_count,
+                MIN(transactions.created_at) as first_created_at,
+                MAX(transactions.created_at) as last_created_at
+            ')
             ->whereIn('transactions.branch_id', $scopeBranchIds)
             ->whereNull('transactions.regulated_classification')
             ->whereBetween('transactions.created_at', [$rangeStart, $rangeEnd])
@@ -257,6 +307,8 @@ class ReportController extends Controller
                 'category' => $row->category,
                 'quantity_sold' => (int) $row->quantity_sold,
                 'transactions_count' => (int) $row->transactions_count,
+                'first_created_at' => $row->first_created_at,
+                'last_created_at' => $row->last_created_at,
             ])
             ->values();
 
@@ -272,9 +324,11 @@ class ReportController extends Controller
                 medicines.reorder_level,
                 medicines.price,
                 branches.branch_name,
-                batches.expiry_date
+                batches.expiry_date,
+                inventories.created_at
             ')
             ->whereIn('inventories.branch_id', $scopeBranchIds)
+            ->whereBetween('inventories.created_at', [$rangeStart, $rangeEnd])
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
                     ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
@@ -302,6 +356,7 @@ class ReportController extends Controller
                     'reorder_level' => (int) $row->reorder_level,
                     'price' => (float) $row->price,
                     'expiry_date' => $row->expiry_date,
+                    'created_at' => $row->created_at,
                     'status' => $status,
                 ];
             })
@@ -362,6 +417,41 @@ class ReportController extends Controller
             ->map(fn ($transaction) => $this->mapRegulatedTransaction($transaction))
             ->values();
 
+        $stockTransfers = InventoryTransfer::query()
+            ->with([
+                'medicine:medicine_id,medicine_name,generic_name',
+                'batch:batch_id,batch_number,expiry_date,mfg_date',
+                'fromBranch:branch_id,branch_name',
+                'toBranch:branch_id,branch_name',
+                'requester:user_id,first_name,last_name',
+                'resolver:user_id,first_name,last_name',
+            ])
+            ->where(function ($query) use ($scopeBranchIds) {
+                $query->whereIn('from_branch_id', $scopeBranchIds)
+                    ->orWhereIn('to_branch_id', $scopeBranchIds);
+            })
+            ->whereBetween('created_at', [$rangeStart, $rangeEnd])
+            ->latest('created_at')
+            ->limit(20)
+            ->get()
+            ->map(fn (InventoryTransfer $transfer) => [
+                'inventory_transfer_id' => $transfer->inventory_transfer_id,
+                'medicine_name' => $transfer->medicine?->medicine_name,
+                'generic_name' => $transfer->medicine?->generic_name,
+                'batch_number' => $transfer->batch?->batch_number ?? $transfer->batch_id,
+                'expiry_date' => $transfer->batch?->expiry_date,
+                'mfg_date' => $transfer->batch?->mfg_date,
+                'from_branch_name' => $transfer->fromBranch?->branch_name,
+                'to_branch_name' => $transfer->toBranch?->branch_name,
+                'quantity' => (int) $transfer->quantity,
+                'status' => $transfer->status,
+                'requested_by' => trim(($transfer->requester?->first_name ?? '') . ' ' . ($transfer->requester?->last_name ?? '')),
+                'resolved_by' => trim(($transfer->resolver?->first_name ?? '') . ' ' . ($transfer->resolver?->last_name ?? '')) ?: null,
+                'created_at' => $transfer->created_at,
+                'resolved_at' => $transfer->resolved_at,
+            ])
+            ->values();
+
         $dangerousTransactions = Transaction::query()
             ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name'])
             ->whereIn('branch_id', $scopeBranchIds)
@@ -390,6 +480,8 @@ class ReportController extends Controller
                     'company_id' => $companyId,
                     'branch_id' => $branchId,
                     'days' => $days,
+                    'start_date' => $rangeStart->toDateString(),
+                    'end_date' => $rangeEnd->toDateString(),
                     'label' => $scopeLabel,
                 ],
                 'summary' => [
@@ -418,6 +510,7 @@ class ReportController extends Controller
                     'recent_transactions' => $recentTransactions,
                     'prescribed_transactions' => $prescribedTransactions,
                     'dangerous_transactions' => $dangerousTransactions,
+                    'stock_transfers' => $stockTransfers,
                 ],
                 'analysis' => $analysis,
             ],

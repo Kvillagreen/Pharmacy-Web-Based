@@ -15,10 +15,20 @@ class TransactionItem extends Model
     protected $fillable = [
         'medicine_id',
         'transaction_id',
-        'quantity'
+        'batch_id',
+        'batch_number',
+        'expiry_date',
+        'mfg_date',
+        'quantity',
+        'price',
     ];
     public function medicine()
     {
         return $this->belongsTo(Medicine::class, 'medicine_id', 'medicine_id');
+    }
+
+    public function batch()
+    {
+        return $this->belongsTo(Batch::class, 'batch_id', 'batch_id');
     }
 }

@@ -23,7 +23,7 @@ class InventoryTransferController extends Controller
         $transfers = InventoryTransfer::query()
             ->with([
                 'medicine:medicine_id,medicine_name,generic_name',
-                'batch:batch_id,expiry_date,received_date,mfg_date,location',
+                'batch:batch_id,batch_number,expiry_date,received_date,mfg_date,location',
                 'fromBranch:branch_id,branch_name',
                 'toBranch:branch_id,branch_name',
                 'requester:user_id,first_name,last_name',
@@ -304,6 +304,7 @@ class InventoryTransferController extends Controller
         ]);
 
         $newBatch = Batch::create([
+            'batch_number' => $transfer->batch?->batch_number,
             'expiry_date' => $transfer->batch?->expiry_date,
             'received_date' => $transfer->batch?->received_date,
             'mfg_date' => $transfer->batch?->mfg_date,
@@ -344,6 +345,7 @@ class InventoryTransferController extends Controller
         }
 
         return (string) $existingBatch->expiry_date === (string) $sourceBatch->expiry_date
-            && (string) $existingBatch->received_date === (string) $sourceBatch->received_date;
+            && (string) $existingBatch->received_date === (string) $sourceBatch->received_date
+            && (string) ($existingBatch->batch_number ?? '') === (string) ($sourceBatch->batch_number ?? '');
     }
 }

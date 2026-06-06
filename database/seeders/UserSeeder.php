@@ -56,7 +56,7 @@ class UserSeeder extends Seeder
         $company = Company::updateOrCreate(
             ['company_email' => 'testcompany@kmvpharmacy.com'],
             [
-                'company_name' => 'KMV Pharmacy Test Company',
+                'company_name' => 'Sto. Rosario Drug Store Test Company',
                 'tin_number' => '1234567890',
             ]
         );
@@ -64,7 +64,7 @@ class UserSeeder extends Seeder
         $branch = Branch::updateOrCreate(
             [
                 'company_id' => $company->company_id,
-                'branch_name' => 'KMV Main Branch',
+                'branch_name' => 'Sto. Rosario Main Branch',
             ],
             [
                 'branch_address' => 'Testing Branch Address',

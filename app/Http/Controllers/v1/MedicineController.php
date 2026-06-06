@@ -202,6 +202,7 @@ class MedicineController extends Controller
                 'medicines.is_dangerous',
                 'medicines.needs_protection',
                 'batches.batch_id',
+                'batches.batch_number',
                 'batches.expiry_date',
                 'batches.received_date',
                 'batches.status as batch_status',
@@ -365,6 +366,7 @@ class MedicineController extends Controller
             ]);
 
             $batch = Batch::create([
+                'batch_number' => $data['batch_number'],
                 'expiry_date' => $data['expiry_date'],
                 'received_date' => $data['received_date'],
                 'mfg_date' => $data['mfg_date'],
@@ -449,6 +451,7 @@ class MedicineController extends Controller
 
             $batch = Batch::where('batch_id', $inventory->batch_id)->lockForUpdate()->firstOrFail();
             $batch->update([
+                'batch_number' => $data['batch_number'],
                 'expiry_date' => $data['expiry_date'],
                 'received_date' => $data['received_date'],
                 'status' => 'active',

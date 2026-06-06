@@ -23,6 +23,7 @@ class MethodMedicineRequest extends FormRequest
         return [
             'inventory_id' => ['nullable', 'integer', 'exists:inventories,inventory_id'],
             'batch_id' => ['nullable', 'integer', 'exists:batches,batch_id'],
+            'batch_number' => ['required', 'string', 'max:120'],
             'medicine_name' => ['required', 'string'],
             'generic_name' => ['required', 'string'],
             'price' => ['required', 'numeric', 'min:1'], // price must be at least 1
@@ -97,6 +98,7 @@ class MethodMedicineRequest extends FormRequest
         return [
             // Required field messages
             'medicine_name.required' => 'Medicine Name is required.',
+            'batch_number.required' => 'Batch Number is required.',
             'generic_name.required' => 'Generic Name is required.', // fixed typo
             'price.required' => 'Price is required.',
             'category.required' => 'Category is required.',
@@ -125,6 +127,7 @@ class MethodMedicineRequest extends FormRequest
 
             // Type validation messages
             'medicine_name.string' => 'Medicine Name must be a string.',
+            'batch_number.string' => 'Batch Number must be a string.',
             'generic_name.string' => 'Generic Name must be a string.',
             'price.numeric' => 'Price must be an number.',
             'category.string' => 'Category must be a string.',

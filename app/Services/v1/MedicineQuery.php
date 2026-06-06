@@ -21,6 +21,9 @@ class MedicineQuery {
         'stocks' => 'inventories.stocks',
         'created_at' => 'inventories.created_at',
         'medicine_id' => 'inventories.medicine_id',
+        'batch_number' => 'batches.batch_number',
+        'batch_id' => 'batches.batch_id',
+        'expiry_date' => 'batches.expiry_date',
     ];
 
     // ✅ Operators mapping
@@ -37,6 +40,7 @@ class MedicineQuery {
         "created_at",
         "medicine_id",
         "generic_name",
+        "batch_number",
         "batch_id",
         "expiry_date",
         "stocks"
@@ -111,7 +115,8 @@ class MedicineQuery {
         $q->where('medicines.category', 'like', "%$search%")
           ->orWhere('medicines.generic_name', 'like', "%$search%")
           ->orWhere('medicines.medicine_name', 'like', "%$search%")
-          ->orWhere('medicines.medicine_id', 'like', "%$search%");
+          ->orWhere('medicines.medicine_id', 'like', "%$search%")
+          ->orWhere('batches.batch_number', 'like', "%$search%");
     });
 }
 
