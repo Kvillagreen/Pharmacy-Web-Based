@@ -116,11 +116,10 @@ class ReportController extends Controller
             ]);
         }
 
-        $normalTransactions = Transaction::query()
-            ->whereIn('branch_id', $scopeBranchIds)
-            ->whereNull('regulated_classification');
+        $allTransactions = Transaction::query()
+            ->whereIn('branch_id', $scopeBranchIds);
 
-        $transactionSummary = (clone $normalTransactions)
+        $transactionSummary = (clone $allTransactions)
             ->whereIn('branch_id', $scopeBranchIds)
             ->whereBetween('created_at', [$previousStart, $rangeEnd])
             ->selectRaw(
@@ -175,7 +174,7 @@ class ReportController extends Controller
 
         $expiring30Count = (int) ($batchSummary->expiring_30_count ?? 0);
 
-        $dailyRevenueRaw = (clone $normalTransactions)
+        $dailyRevenueRaw = (clone $allTransactions)
             ->selectRaw('DATE(created_at) as sale_date, SUM(total_amount) as total_revenue, COUNT(*) as transaction_count')
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->groupBy(DB::raw('DATE(created_at)'))
@@ -201,7 +200,7 @@ class ReportController extends Controller
             'transaction_count' => (int) $point['transaction_count'],
         ])->values();
 
-        $dailyDiscountRaw = (clone $normalTransactions)
+        $dailyDiscountRaw = (clone $allTransactions)
             ->selectRaw('DATE(created_at) as sale_date, SUM(discount) as total_discount')
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->groupBy(DB::raw('DATE(created_at)'))
@@ -220,7 +219,7 @@ class ReportController extends Controller
             ];
         })->values();
 
-        $paymentMix = (clone $normalTransactions)
+        $paymentMix = (clone $allTransactions)
             ->selectRaw('payment_method, SUM(total_amount) as total_revenue, COUNT(*) as transaction_count')
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->groupBy('payment_method')
@@ -238,7 +237,6 @@ class ReportController extends Controller
             ->join('medicines', 'transaction_items.medicine_id', '=', 'medicines.medicine_id')
             ->selectRaw('medicines.category, SUM(transaction_items.quantity) as quantity_sold, COUNT(DISTINCT transactions.transaction_id) as transaction_count')
             ->whereIn('transactions.branch_id', $scopeBranchIds)
-            ->whereNull('transactions.regulated_classification')
             ->whereBetween('transactions.created_at', [$rangeStart, $rangeEnd])
             ->groupBy('medicines.category')
             ->orderByDesc('quantity_sold')
@@ -254,7 +252,6 @@ class ReportController extends Controller
         $branchPerformance = Branch::query()
             ->leftJoin('transactions', function ($join) use ($rangeStart, $rangeEnd) {
                 $join->on('branches.branch_id', '=', 'transactions.branch_id')
-                    ->whereNull('transactions.regulated_classification')
                     ->whereBetween('transactions.created_at', [$rangeStart, $rangeEnd]);
             })
             ->where('branches.status', 'active')
@@ -294,7 +291,6 @@ class ReportController extends Controller
                 MAX(transactions.created_at) as last_created_at
             ')
             ->whereIn('transactions.branch_id', $scopeBranchIds)
-            ->whereNull('transactions.regulated_classification')
             ->whereBetween('transactions.created_at', [$rangeStart, $rangeEnd])
             ->groupBy('medicines.medicine_id', 'medicines.medicine_name', 'medicines.generic_name', 'medicines.category')
             ->orderByDesc('quantity_sold')
@@ -388,8 +384,9 @@ class ReportController extends Controller
             ['status' => 'Expiring Soon', 'count' => (int) ($inventoryStatusSnapshot->expiring_soon_count ?? 0)],
         ])->values();
 
-        $recentTransactions = (clone $normalTransactions)
+        $recentTransactions = Transaction::query()
             ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name'])
+            ->whereIn('branch_id', $scopeBranchIds)
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->latest('created_at')
             ->limit(10)
@@ -400,6 +397,9 @@ class ReportController extends Controller
                 'cashier_name' => trim(($transaction->user?->first_name ?? '') . ' ' . ($transaction->user?->last_name ?? '')),
                 'payment_method' => $transaction->payment_method,
                 'reference_number' => $transaction->reference_number,
+                'transaction_type' => $transaction->transaction_type,
+                'regulated_classification' => $transaction->regulated_classification,
+                'patient_name' => $transaction->patient_name,
                 'total_amount' => (float) $transaction->total_amount,
                 'discount' => (float) ($transaction->discount ?? 0),
                 'created_at' => $transaction->created_at,
