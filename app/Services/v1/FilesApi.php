@@ -5,6 +5,7 @@ namespace App\Services\v1;
 use Illuminate\Http\Client\Response;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 class FilesApi
 {
@@ -15,23 +16,49 @@ class FilesApi
         $category = $this->normalizeCategory($category);
         $payload = $this->metadataPayload($category, $metadata);
 
+        $extension = strtolower($file->getClientOriginalExtension());
+        $base = pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME) ?: 'file';
+        $uniqueFilename = sprintf('%s-%s%s', Str::slug($base), Str::uuid()->toString(), $extension !== '' ? '.' . $extension : '');
+
+        $baseUrl = rtrim((string) config('services.files_api.url'), '/');
+
+        // Use the pharmacy upload endpoint only in production for the pharmacy domain
+        if (app()->environment('production') && str_contains(strtolower($baseUrl), 'pharmacy-web-based.kvelop.com')) {
+            $uploadPath = '/api/upload';
+        } else {
+            $uploadPath = '/files';
+        }
+
         $response = $this->pendingRequest()
             ->attach(
                 'file',
                 fopen($file->getRealPath(), 'rb'),
-                $file->getClientOriginalName(),
+                $uniqueFilename,
                 ['Content-Type' => $file->getMimeType() ?: 'application/octet-stream']
             )
-            ->post($this->url('/files'), [
+            ->post($this->url($uploadPath), [
                 ...$payload,
                 'category' => $category,
+                'file_name' => $uniqueFilename,
             ]);
 
         $this->throwIfUnexpected($response, [201], 'Unable to upload file.');
 
         $json = $response->json();
-        if (!is_array($json) || empty($json['uuid'])) {
-            throw new FilesApiException('Files API upload response did not include a UUID.', $response->status(), $json);
+        if (!is_array($json)) {
+            throw new FilesApiException('Files API upload response was invalid.', $response->status(), $json);
+        }
+
+        // Normalize responses from different upload endpoints (file_name, id, uuid)
+        if (empty($json['uuid'])) {
+            if (!empty($json['file_name'])) {
+                $json['uuid'] = (string) $json['file_name'];
+            } elseif (!empty($json['id'])) {
+                $json['uuid'] = (string) $json['id'];
+            } else {
+                // Fall back to the unique filename we sent
+                $json['uuid'] = $uniqueFilename;
+            }
         }
 
         return $json;
@@ -102,7 +129,16 @@ class FilesApi
 
     public function downloadToTemporaryFile(string $uuid): array
     {
-        $response = $this->pendingRequest()->get($this->url('/files/' . rawurlencode($uuid)));
+        // Some deployments (pharmacy-web-based.kvelop.com) expose files via /view?file_name=<name>
+        $baseUrl = rtrim((string) config('services.files_api.url'), '/');
+
+        if (app()->environment('production') && str_contains(strtolower($baseUrl), 'pharmacy-web-based.kvelop.com')) {
+            $endpoint = '/view?file_name=' . rawurlencode($uuid);
+        } else {
+            $endpoint = '/files/' . rawurlencode($uuid);
+        }
+
+        $response = $this->pendingRequest()->get($this->url($endpoint));
         $this->throwIfUnexpected($response, [200], 'Unable to download file.');
 
         $path = tempnam(sys_get_temp_dir(), 'files-api-');
