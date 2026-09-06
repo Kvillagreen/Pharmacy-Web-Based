@@ -22,32 +22,81 @@ class FilesApi
         $uniqueFilename = sprintf('%s-%s%s', Str::slug($base), Str::uuid()->toString(), $extension !== '' ? '.' . $extension : '');
 
         $baseUrl = rtrim((string) config('services.files_api.url'), '/');
+        $isPharmacyHost = str_contains(strtolower($baseUrl), 'pharmacy-web-based.kvelop.com');
 
         // Use the pharmacy upload endpoint only in production for the pharmacy domain
-        if (app()->environment('production') && str_contains(strtolower($baseUrl), 'pharmacy-web-based.kvelop.com')) {
-            $uploadPath = '/api/upload';
-        } else {
-            $uploadPath = '/files';
-        }
+        $initialUploadPath = (app()->environment('production') && $isPharmacyHost) ? '/api/upload' : '/files';
 
-        $response = $this->pendingRequest()
-            ->attach(
-                'file',
-                fopen($file->getRealPath(), 'rb'),
-                $uniqueFilename,
-                ['Content-Type' => $file->getMimeType() ?: 'application/octet-stream']
-            )
-            ->post($this->url($uploadPath), [
-                ...$payload,
-                'category' => $category,
-                'file_name' => $uniqueFilename,
-            ]);
+        $maxAttempts = max(1, (int) config('services.files_api.retries', 2));
+        $attempt = 0;
+        $lastResponse = null;
+        $uploadPath = $initialUploadPath;
+
+        // Try to upload with retries; on server errors from /api/upload fall back to /files
+        do {
+            $attempt++;
+            try {
+                $response = $this->pendingRequest()
+                    ->attach(
+                        'file',
+                        fopen($file->getRealPath(), 'rb'),
+                        $uniqueFilename,
+                        ['Content-Type' => $file->getMimeType() ?: 'application/octet-stream']
+                    )
+                    ->post($this->url($uploadPath), [
+                        ...$payload,
+                        'category' => $category,
+                        'file_name' => $uniqueFilename,
+                    ]);
+
+                $lastResponse = $response;
+
+                // If server error, log and possibly retry
+                if ($response->serverError()) {
+                    Log::warning('Files API upload server error', ['attempt' => $attempt, 'path' => $uploadPath, 'status' => $response->status()]);
+                    // if we used /api/upload and host is pharmacy, try fallback to /files after attempts
+                    if ($attempt >= $maxAttempts && $uploadPath === '/api/upload' && $isPharmacyHost) {
+                        Log::info('Falling back from /api/upload to /files for upload');
+                        $uploadPath = '/files';
+                        $attempt = 0; // reset attempts for fallback
+                        continue;
+                    }
+                    // backoff before retry
+                    usleep(200000 * $attempt);
+                    continue;
+                }
+
+                // break loop if not server error (will be validated below)
+                break;
+            } catch (\Throwable $e) {
+                Log::error('Files API upload exception', ['attempt' => $attempt, 'path' => $uploadPath, 'error' => $e->getMessage()]);
+                $lastResponse = null;
+                if ($attempt < $maxAttempts) {
+                    usleep(200000 * $attempt);
+                    continue;
+                }
+
+                // If we've exhausted attempts and we were on /api/upload, fall back once to /files
+                if ($uploadPath === '/api/upload' && $isPharmacyHost) {
+                    Log::info('Falling back from /api/upload to /files after exception');
+                    $uploadPath = '/files';
+                    $attempt = 0;
+                    continue;
+                }
+
+                throw new FilesApiException('Unable to upload file (client exception). ' . $e->getMessage(), 502);
+            }
+        } while ($attempt < $maxAttempts || $uploadPath !== $initialUploadPath && $attempt < $maxAttempts);
+
+        if ($lastResponse === null) {
+            throw new FilesApiException('Files API did not return a response.', 502);
+        }
 
         $this->throwIfUnexpected($response, [201], 'Unable to upload file.');
 
-        $json = $response->json();
+        $json = $lastResponse->json();
         if (!is_array($json)) {
-            throw new FilesApiException('Files API upload response was invalid.', $response->status(), $json);
+            throw new FilesApiException('Files API upload response was invalid.', $lastResponse->status(), $json);
         }
 
         // Normalize responses from different upload endpoints (file_name, id, uuid)
@@ -133,14 +182,41 @@ class FilesApi
         // Some deployments (pharmacy-web-based.kvelop.com) expose files via /view?file_name=<name>
         $baseUrl = rtrim((string) config('services.files_api.url'), '/');
 
-        if (app()->environment('production') && str_contains(strtolower($baseUrl), 'pharmacy-web-based.kvelop.com')) {
-            $endpoint = '/view?file_name=' . rawurlencode($uuid);
+        $isPharmacyHost = str_contains(strtolower($baseUrl), 'pharmacy-web-based.kvelop.com');
+
+        $endpoints = [];
+        if (app()->environment('production') && $isPharmacyHost) {
+            $endpoints[] = '/view?file_name=' . rawurlencode($uuid);
+            $endpoints[] = '/files/' . rawurlencode($uuid);
         } else {
-            $endpoint = '/files/' . rawurlencode($uuid);
+            $endpoints[] = '/files/' . rawurlencode($uuid);
         }
 
-        $response = $this->pendingRequest()->get($this->url($endpoint));
-        $this->throwIfUnexpected($response, [200], 'Unable to download file.');
+        $response = null;
+        foreach ($endpoints as $ep) {
+            try {
+                $resp = $this->pendingRequest()->get($this->url($ep));
+            } catch (\Throwable $e) {
+                Log::warning('Files API download attempt failed', ['endpoint' => $ep, 'error' => $e->getMessage()]);
+                $resp = null;
+            }
+
+            if ($resp === null) {
+                continue;
+            }
+
+            if ($resp->successful()) {
+                $response = $resp;
+                break;
+            }
+
+            // log non-200 responses and try next endpoint if available
+            Log::warning('Files API download returned non-200', ['endpoint' => $ep, 'status' => $resp->status()]);
+        }
+
+        if ($response === null) {
+            throw new FilesApiException('Unable to download file.', 502);
+        }
 
         $path = tempnam(sys_get_temp_dir(), 'files-api-');
         if ($path === false) {

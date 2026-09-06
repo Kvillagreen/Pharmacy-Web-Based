@@ -49,6 +49,7 @@ return [
         'key' => env('FILES_API_KEY', ''),
         'timeout' => env('FILES_API_TIMEOUT', 15),
         'connect_timeout' => env('FILES_API_CONNECT_TIMEOUT', 5),
+        'retries' => env('FILES_API_RETRIES', 2),
     ],
 
 ];
