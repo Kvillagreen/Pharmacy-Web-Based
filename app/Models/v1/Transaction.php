@@ -26,9 +26,13 @@ class Transaction extends Model
         'sub_total',
         'change',
         'discount',
+        'vat_amount',
         'discount_type',
         'scpwd_id_number',
         'used_amount',
+        'status',
+        'voided_at',
+        'void_reason',
         'patient_name',
         'membership_id',
         'prescription_path',
@@ -56,6 +60,7 @@ class Transaction extends Model
     protected $casts = [
         'documents_submitted' => 'boolean',
         'regulated_details' => 'array',
+        'voided_at' => 'datetime',
     ];
 
      public function user()
@@ -83,7 +88,8 @@ class Transaction extends Model
             return null;
         }
 
-        return Storage::disk(config('transactions.documents_disk', 'public'))->url($this->prescription_path);
+        $url = Storage::disk(config('transactions.documents_disk', 'public'))->url($this->prescription_path);
+        return $this->resolveDocumentUrl($url);
     }
 
     public function getMemberIdImageUrlAttribute(): ?string
@@ -92,6 +98,25 @@ class Transaction extends Model
             return null;
         }
 
-        return Storage::disk(config('transactions.documents_disk', 'public'))->url($this->member_id_image_path);
+        $url = Storage::disk(config('transactions.documents_disk', 'public'))->url($this->member_id_image_path);
+        return $this->resolveDocumentUrl($url);
+    }
+
+    private function resolveDocumentUrl(string $path): string
+    {
+        if (app()->environment('production') && str_starts_with($path, 'http')) {
+            return $path;
+        }
+
+        $baseUrl = app()->environment('production')
+            ? rtrim(config('app.url'), '/')
+            : 'http://127.0.0.1:8000';
+
+        if (str_starts_with($path, 'http')) {
+            $parsedPath = parse_url($path, PHP_URL_PATH) ?: '';
+            return $baseUrl . '/' . ltrim($parsedPath, '/');
+        }
+
+        return $baseUrl . '/' . ltrim($path, '/');
     }
 }

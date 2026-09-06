@@ -18,6 +18,10 @@ class Inventory extends Model
         'medicine_id',
         'batch_id',
         'stocks',
+        'container_type',
+        'container_name',
+        'container_count',
+        'pcs_per_container',
     ];
 
      public function medicine()

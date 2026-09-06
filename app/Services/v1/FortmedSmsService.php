@@ -193,7 +193,7 @@ class FortmedSmsService
 
             if ($this->supportsExtendedSmsLogColumns()) {
                 $attributes['reference_number'] = $existingReferenceNumber ?: $this->generateReferenceNumber($direction === 'outbound' ? 'OUT' : 'IN');
-                $attributes['template_tag'] = $direction === 'outbound' ? 'Sent Reply' : 'Incoming Reply';
+                $attributes['template_tag'] = null;
             }
 
             SmsMessage::updateOrCreate(

@@ -147,7 +147,7 @@ class DashboardController extends Controller
                 ->whereIn('inventories.branch_id', $scopeBranchIds)
                 ->where(function ($statusQuery) {
                     $statusQuery->whereNull('batches.status')
-                        ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+                        ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
                 })
                 ->first();
 
@@ -160,7 +160,7 @@ class DashboardController extends Controller
                 ->whereIn('inventories.branch_id', $scopeBranchIds)
                 ->where(function ($statusQuery) {
                     $statusQuery->whereNull('batches.status')
-                        ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+                        ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
                 })
                 ->selectRaw(
                     'COUNT(DISTINCT CASE WHEN expiry_date >= ? AND expiry_date <= ? THEN batches.batch_id END) as expiring_30_count,
@@ -257,6 +257,8 @@ class DashboardController extends Controller
                     'payment_method' => $transaction->payment_method,
                     'total_amount' => (float) $transaction->total_amount,
                     'discount' => (float) ($transaction->discount ?? 0),
+                    'status' => $transaction->status,
+                    'voided_at' => $transaction->voided_at,
                     'created_at' => $transaction->created_at,
                 ])
                 ->values();

@@ -48,8 +48,10 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
         Route::get('/permissions', [PermissionController::class, 'index']);
         Route::get('/permissions/{permission}', [PermissionController::class, 'show']);
         Route::get('/medicine/categories', [MedicineController::class, 'categories']);
+        Route::get('/medicine/archived/list', [MedicineController::class, 'archived']);
         Route::get('/medicine', [MedicineController::class, 'index']);
         Route::get('/medicine/{medicine}', [MedicineController::class, 'show']);
+        Route::get('/fefo/archived/list', [FefoController::class, 'archived']);
         Route::get('/fefo', [FefoController::class, 'index']);
         Route::get('/fefo/{fefo}', [FefoController::class, 'show']);
         Route::get('/transaction', [TransactionController::class, 'index']);
@@ -77,6 +79,7 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
         Route::apiResource('/medicine', MedicineController::class)->except(['index', 'show']);
         Route::apiResource('/fefo', FefoController::class)->except(['index', 'show']);
         Route::apiResource('/transaction', TransactionController::class)->except(['index', 'show']);
+        Route::post('/transaction/{transaction}/void', [TransactionController::class, 'void']);
         Route::post('/inventory-transfer', [InventoryTransferController::class, 'store']);
         Route::post('/inventory-transfer/{id}/accept', [InventoryTransferController::class, 'accept']);
         Route::post('/inventory-transfer/{id}/decline', [InventoryTransferController::class, 'decline']);

@@ -42,8 +42,10 @@ class MethodTransactionRequest extends FormRequest
             'reference_number' => ['nullable', 'string', 'regex:/^\d{12}$/'],
 
             'discount' => ['required', 'numeric', 'min:0'],
+            'vat_amount' => ['nullable', 'numeric', 'min:0'],
             'discount_type' => ['nullable', Rule::in([
-                'Discount',
+                'SC',
+                'PWD',
                 'SCPWD',
             ])],
             'scpwd_id_number' => ['nullable', 'string', 'max:13', 'regex:/^(?:\d{12}|OSCA-\d{8})$/'],
@@ -124,8 +126,8 @@ class MethodTransactionRequest extends FormRequest
                 $validator->errors()->add('reference_number', 'Reference number is only allowed for card or Gcash payments.');
             }
 
-            if ($this->input('discount_type') === 'SCPWD' && !filled($this->input('scpwd_id_number'))) {
-                $validator->errors()->add('scpwd_id_number', 'SC/PWD ID number is required for SC/PWD discounts.');
+            if (in_array($this->input('discount_type'), ['SC', 'PWD', 'SCPWD'], true) && !filled($this->input('scpwd_id_number'))) {
+                $validator->errors()->add('scpwd_id_number', 'Discount ID number is required for SC/PWD discounts.');
             }
 
             $requirements = $this->regulatedRequirementsInPayload();
@@ -145,6 +147,10 @@ class MethodTransactionRequest extends FormRequest
             }
 
             if ($requirements['has_controlled']) {
+                if (!$this->hasFile('prescription')) {
+                    $validator->errors()->add('prescription', 'Prescription PDF or image is required for prescribed drug transactions.');
+                }
+
                 $controlledFields = [
                     'patient_age' => 'Patient age is required for prescribed drug transactions.',
                     'prescriber_name' => 'Prescriber full name is required for prescribed drug transactions.',
@@ -165,6 +171,14 @@ class MethodTransactionRequest extends FormRequest
             }
 
             if ($requirements['has_dangerous']) {
+                if (!$this->hasFile('prescription')) {
+                    $validator->errors()->add('prescription', 'Yellow prescription PDF or image is required for dangerous drug transactions.');
+                }
+
+                if (!$this->hasFile('member_id_image')) {
+                    $validator->errors()->add('member_id_image', 'Valid ID PDF or image is required for dangerous drug transactions.');
+                }
+
                 $dangerousFields = [
                     'prescriber_name' => 'Physician full name is required for dangerous drug transactions.',
                     'prescriber_clinic_address' => 'Clinic address is required for dangerous drug transactions.',

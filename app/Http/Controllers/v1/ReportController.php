@@ -152,7 +152,7 @@ class ReportController extends Controller
             ->whereIn('inventories.branch_id', $scopeBranchIds)
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
-                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->first();
 
@@ -164,7 +164,7 @@ class ReportController extends Controller
             ->whereIn('inventories.branch_id', $scopeBranchIds)
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
-                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->selectRaw(
                 'COUNT(DISTINCT CASE WHEN expiry_date >= ? AND expiry_date <= ? THEN batches.batch_id END) as expiring_30_count',
@@ -327,7 +327,7 @@ class ReportController extends Controller
             ->whereBetween('inventories.created_at', [$rangeStart, $rangeEnd])
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
-                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->orderByRaw('CASE WHEN inventories.stocks <= medicines.reorder_level THEN 0 ELSE 1 END')
             ->orderBy('batches.expiry_date')
@@ -364,7 +364,7 @@ class ReportController extends Controller
             ->whereIn('inventories.branch_id', $scopeBranchIds)
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
-                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->selectRaw('
                 SUM(CASE WHEN inventories.stocks <= 0 THEN 1 ELSE 0 END) as out_of_stock_count,
@@ -532,7 +532,7 @@ class ReportController extends Controller
         if ($selectedYear >= $currentYear) {
             return response()->json([
                 'success' => false,
-                'message' => 'BIR 0605 summaries can only be generated for a completed taxable year.',
+                'message' => 'BIR 2306 summaries can only be generated for a completed taxable year.',
             ], 422);
         }
 
@@ -588,7 +588,7 @@ class ReportController extends Controller
         return response()->json([
             'success' => true,
             'data' => [
-                'form_no' => '0605',
+                'form_no' => '2306',
                 'generated_at' => now(),
                 'branch_id' => $branch->branch_id,
                 'branch_name' => $branch->branch_name,
@@ -603,7 +603,7 @@ class ReportController extends Controller
                 'atc' => 'MC 200',
                 'atc_description' => 'Others',
                 'manner_of_payment' => 'Voluntary Payment',
-                'type_of_payment' => 'Others - Income tax payment summary via BIR Form 0605',
+                'type_of_payment' => 'Others - Income tax payment summary via BIR Form 2306',
                 'line_of_business' => $lineOfBusiness,
                 'registered_address' => $registeredAddress,
                 'telephone_number' => $telephoneNumber,
@@ -624,7 +624,7 @@ class ReportController extends Controller
                 'income_tax_due' => $incomeTaxDue,
                 'is_ready_to_file' => false,
                 'data_notes' => [
-                    'This output follows the BIR Form 0605 payment-form layout using the currently available sales and tax summary data in the system.',
+                    'This output follows the BIR Form 2306 payment-form layout using the currently available sales and tax summary data in the system.',
                     'ATC, tax type code, due date, and payment classification should still be validated against the actual liability being paid before filing.',
                     'Basic tax payment is derived from the computed annual tax due in the current report, while surcharge, interest, and compromise are set to 0.00 unless manually assessed.',
                     'Please reconcile this payment summary with your accountant and official BIR filing requirements before submission.',
@@ -699,6 +699,9 @@ class ReportController extends Controller
             'discount' => (float) ($transaction->discount ?? 0),
             'patient_name' => $transaction->patient_name,
             'created_at' => $transaction->created_at,
+            'prescription_url' => $transaction->prescription_url,
+            'member_id_image_url' => $transaction->member_id_image_url,
+            'documents_submitted' => (bool) $transaction->documents_submitted,
             'regulated_details' => $transaction->regulated_details,
         ];
     }

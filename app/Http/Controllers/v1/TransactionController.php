@@ -105,9 +105,13 @@ class TransactionController extends Controller
                 'patient_name' => $transaction->patient_name,
                 'sub_total' => (float) ($transaction->sub_total ?? 0),
                 'discount' => (float) ($transaction->discount ?? 0),
+                'vat_amount' => (float) ($transaction->vat_amount ?? 0),
                 'total_amount' => (float) ($transaction->total_amount ?? 0),
                 'used_amount' => (float) ($transaction->used_amount ?? 0),
                 'change' => (float) ($transaction->change ?? 0),
+                'status' => $transaction->status ?? 'completed',
+                'voided_at' => $transaction->voided_at,
+                'void_reason' => $transaction->void_reason,
                 'created_at' => $transaction->created_at,
             ];
         })->values();
@@ -177,6 +181,10 @@ class TransactionController extends Controller
         }
 
         $query->where('branches.status', 'active')
+        ->where(function ($statusQuery) {
+            $statusQuery->whereNull('medicines.status')
+                ->orWhere('medicines.status', 'active');
+        })
         ->where('medicines.stocks', '>', 0)
         ->where('batches.expiry_date', '>', now())
         ->orderBy('medicines.medicine_name')
@@ -359,6 +367,8 @@ class TransactionController extends Controller
 
             $transaction = Transaction::create([
                 ...collect($data)->except('items')->toArray(),
+                'vat_amount' => (float) ($data['vat_amount'] ?? 0),
+                'status' => 'completed',
                 'reference_number' => in_array(($data['payment_method'] ?? ''), ['Card', 'Gcash'], true)
                     ? ($data['reference_number'] ?? null)
                     : null,
@@ -489,6 +499,70 @@ class TransactionController extends Controller
     {
     }
 
+    public function void(Request $request, string $id)
+    {
+        $data = $request->validate([
+            'void_reason' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        DB::beginTransaction();
+
+        try {
+            $transaction = Transaction::query()
+                ->with('items')
+                ->where('transaction_id', $id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if (($transaction->status ?? 'completed') === 'voided') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Transaction is already voided.',
+                ], 422);
+            }
+
+            $medicineIds = collect();
+
+            foreach ($transaction->items as $item) {
+                $inventory = Inventory::query()
+                    ->where('branch_id', $transaction->branch_id)
+                    ->where('medicine_id', $item->medicine_id)
+                    ->where('batch_id', $item->batch_id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($inventory) {
+                    $inventory->increment('stocks', (int) $item->quantity);
+                    $medicineIds->push((int) $item->medicine_id);
+                }
+            }
+
+            $transaction->update([
+                'status' => 'voided',
+                'voided_at' => now(),
+                'void_reason' => trim((string) ($data['void_reason'] ?? '')) ?: null,
+            ]);
+
+            $medicineIds->unique()->each(fn (int $medicineId) => $this->syncMedicineStocks($medicineId));
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Transaction voided and stocks restored successfully.',
+                'data' => $transaction->fresh(),
+            ]);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Unable to void transaction.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
     private function syncMedicineStocks(int $medicineId): void
     {
         $totalStocks = (int) Inventory::query()
@@ -540,7 +614,15 @@ class TransactionController extends Controller
             return false;
         }
 
-        return $request->hasFile('prescription') && $request->hasFile('member_id_image');
+        if ($regulatedClassification === 'controlled') {
+            return $request->hasFile('prescription');
+        }
+
+        if (in_array($regulatedClassification, ['dangerous', 'mixed'], true)) {
+            return $request->hasFile('prescription') && $request->hasFile('member_id_image');
+        }
+
+        return false;
     }
 
     private function resolveRegulatedClassification($inventoryRows): ?string

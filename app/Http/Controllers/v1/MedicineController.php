@@ -5,6 +5,7 @@ namespace App\Http\Controllers\v1;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\v1\MethodMedicineRequest;
 use App\Models\v1\Batch;
+use App\Models\v1\BatchHistory;
 use App\Models\v1\Inventory;
 use App\Models\v1\Medicine;
 use App\Services\v1\MedicineQuery;
@@ -30,6 +31,10 @@ class MedicineController extends Controller
             ->join('inventories', 'medicines.medicine_id', '=', 'inventories.medicine_id')
             ->join('branches', 'inventories.branch_id', '=', 'branches.branch_id')
             ->where('branches.status', 'active')
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('medicines.status')
+                    ->orWhere('medicines.status', 'active');
+            })
             ->when($scopeBranchIds->isNotEmpty(), fn ($query) => $query->whereIn('inventories.branch_id', $scopeBranchIds))
             ->when($hasScopedFilter && $scopeBranchIds->isEmpty(), fn ($query) => $query->whereRaw('1 = 0'))
             ->whereNotNull('medicines.category')
@@ -107,10 +112,18 @@ class MedicineController extends Controller
                 'medicines.is_dangerous',
                 'medicines.needs_protection',
                 'inventories.stocks',
+                'inventories.container_type',
+                'inventories.container_name',
+                'inventories.container_count',
+                'inventories.pcs_per_container',
                 'batches.expiry_date',
                 'batches.received_date',
             ])
             ->where('branches.status', 'active')
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('medicines.status')
+                    ->orWhere('medicines.status', 'active');
+            })
             ->where(function ($query) {
                 $query->whereNull('batches.expiry_date')
                     ->orWhereDate('batches.expiry_date', '>', now()->toDateString());
@@ -196,6 +209,10 @@ class MedicineController extends Controller
                 'medicines.price',
                 'medicines.reorder_level',
                 'inventories.stocks',
+                'inventories.container_type',
+                'inventories.container_name',
+                'inventories.container_count',
+                'inventories.pcs_per_container',
                 'medicines.dosage',
                 'medicines.unit',
                 'medicines.type',
@@ -212,10 +229,14 @@ class MedicineController extends Controller
                 'inventories.updated_at',
             ])
          ->where('branches.status', 'active')
+        ->where(function ($statusQuery) {
+            $statusQuery->whereNull('medicines.status')
+                ->orWhere('medicines.status', 'active');
+        })
         ->where('batches.expiry_date', '>', now())
         ->where(function ($statusQuery) {
             $statusQuery->whereNull('batches.status')
-                ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+                ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
         })
         ->orderBy('medicines.medicine_name')
         ->orderBy('batches.expiry_date', 'asc')
@@ -259,10 +280,14 @@ class MedicineController extends Controller
             ->join('medicines', 'medicines.medicine_id', '=', 'inventories.medicine_id')
             ->join('batches', 'batches.batch_id', '=', 'inventories.batch_id')
             ->where('branches.status', 'active')
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('medicines.status')
+                    ->orWhere('medicines.status', 'active');
+            })
             ->whereDate('batches.expiry_date', '>', $today->toDateString())
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
-                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->when($branchId > 0, fn ($q) => $q->where('inventories.branch_id', $branchId))
             ->when($branchId <= 0 && $companyId > 0, fn ($q) => $q->where('branches.company_id', $companyId))
@@ -286,7 +311,7 @@ class MedicineController extends Controller
             ->where('branches.status', 'active')
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
-                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->when($branchId > 0, fn ($q) => $q->where('inventories.branch_id', $branchId))
             ->when($branchId <= 0 && $companyId > 0, fn ($q) => $q->where('branches.company_id', $companyId))
@@ -351,18 +376,43 @@ class MedicineController extends Controller
                 Cache::put($data['request_token'], true, 30);
             }
 
+            $stocks = $this->resolveStockCount($data);
+
+            $matchingInventory = $this->findMatchingInventory($data);
+            if ($matchingInventory) {
+                $matchingInventory->increment('stocks', $stocks);
+                $matchingInventory->update($this->containerPayload($data));
+                $this->recordBatchHistory((int) $matchingInventory->batch_id, $request, 'stock_merged', 'Matching inventory was merged into this batch.', [
+                    'added_stocks' => $stocks,
+                ]);
+                $this->syncMedicineStocks((int) $matchingInventory->medicine_id);
+
+                DB::commit();
+
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Matching medicine batch merged successfully',
+                    'data' => [
+                        'medicine' => $matchingInventory->medicine,
+                        'batch' => $matchingInventory->batch,
+                        'inventory' => $matchingInventory->fresh(),
+                    ],
+                ], 200);
+            }
+
             $medicine = Medicine::create([
                 'medicine_name' => $data['medicine_name'],
                 'generic_name' => $data['generic_name'],
                 'category' => $data['category'],
                 'price' => $data['price'],
                 'reorder_level' => $data['reorder_level'],
-                'stocks' => $data['stocks'],
+                'stocks' => $stocks,
                 'dosage' => $data['dosage'],
                 'unit' => $data['unit'],
                 'type' => $data['type'],
                 'is_dangerous' => (bool) $data['is_dangerous'],
                 'needs_protection' => (bool) $data['needs_protection'],
+                'status' => 'active',
             ]);
 
             $batch = Batch::create([
@@ -378,10 +428,14 @@ class MedicineController extends Controller
                 'branch_id' => $data['branch_id'],
                 'medicine_id' => $medicine->medicine_id,
                 'batch_id' => $batch->batch_id,
-                'stocks' => $data['stocks'],
+                'stocks' => $stocks,
+                ...$this->containerPayload($data),
             ]);
 
             $this->syncMedicineStocks($medicine->medicine_id);
+            $this->recordBatchHistory((int) $batch->batch_id, $request, 'created', 'Medicine batch added to inventory.', [
+                'stocks' => $stocks,
+            ]);
 
             DB::commit();
 
@@ -403,6 +457,66 @@ class MedicineController extends Controller
 
     public function show(string $id)
     {
+    }
+
+    public function archived(Request $request)
+    {
+        $companyId = (int) $request->input('company_id', 0);
+        $branchId = (int) $request->input('branch_id', 0);
+
+        $items = Medicine::query()
+            ->join('inventories', 'medicines.medicine_id', '=', 'inventories.medicine_id')
+            ->leftJoin('batches', 'batches.batch_id', '=', 'inventories.batch_id')
+            ->leftJoin('branches', 'branches.branch_id', '=', 'inventories.branch_id')
+            ->leftJoin('batch_histories', function ($join) {
+                $join->on('batch_histories.batch_id', '=', 'batches.batch_id')
+                    ->where('batch_histories.action', 'archived');
+            })
+            ->where('medicines.status', 'archived')
+            ->when($branchId > 0, fn ($q) => $q->where('inventories.branch_id', $branchId))
+            ->when($branchId <= 0 && $companyId > 0, fn ($q) => $q->where('branches.company_id', $companyId))
+            ->select([
+                'medicines.medicine_id',
+                'medicines.medicine_name',
+                'medicines.generic_name',
+                'medicines.category',
+                'medicines.type',
+                'medicines.dosage',
+                'medicines.unit',
+                'batches.batch_id',
+                'batches.batch_number',
+                'batches.status as batch_status',
+                'batches.expiry_date',
+                'batches.mfg_date',
+                'inventories.inventory_id',
+                'inventories.stocks',
+                'branches.branch_name',
+                DB::raw('MAX(batch_histories.created_at) as archived_at'),
+            ])
+            ->groupBy(
+                'medicines.medicine_id',
+                'medicines.medicine_name',
+                'medicines.generic_name',
+                'medicines.category',
+                'medicines.type',
+                'medicines.dosage',
+                'medicines.unit',
+                'batches.batch_id',
+                'batches.batch_number',
+                'batches.status',
+                'batches.expiry_date',
+                'batches.mfg_date',
+                'inventories.inventory_id',
+                'inventories.stocks',
+                'branches.branch_name'
+            )
+            ->orderByDesc(DB::raw('COALESCE(MAX(batch_histories.created_at), MAX(medicines.updated_at))'))
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $items,
+        ]);
     }
 
     public function edit(string $id)
@@ -446,7 +560,8 @@ class MedicineController extends Controller
                 ->firstOrFail();
 
             $inventory->update([
-                'stocks' => $data['stocks'],
+                'stocks' => $this->resolveStockCount($data),
+                ...$this->containerPayload($data),
             ]);
 
             $batch = Batch::where('batch_id', $inventory->batch_id)->lockForUpdate()->firstOrFail();
@@ -457,6 +572,10 @@ class MedicineController extends Controller
                 'status' => 'active',
                 'mfg_date' => $data['mfg_date'],
                 'location' => $data['location'],
+            ]);
+
+            $this->recordBatchHistory((int) $batch->batch_id, $request, 'updated', 'Medicine batch details updated.', [
+                'stocks' => $inventory->stocks,
             ]);
 
             $this->syncMedicineStocks($medicine->medicine_id);
@@ -487,15 +606,22 @@ class MedicineController extends Controller
             $medicine = Medicine::where('medicine_id', $medicine_id)->firstOrFail();
             $inventoryBatchIds = Inventory::where('medicine_id', $medicine_id)->pluck('batch_id');
 
-            Inventory::where('medicine_id', $medicine_id)->delete();
-            Batch::whereIn('batch_id', $inventoryBatchIds)->delete();
-            $medicine->delete();
+            Inventory::where('medicine_id', $medicine_id)->update(['stocks' => 0]);
+            Batch::whereIn('batch_id', $inventoryBatchIds)->update(['status' => 'archived']);
+            $medicine->update([
+                'status' => 'archived',
+                'stocks' => 0,
+            ]);
+
+            foreach ($inventoryBatchIds as $batchId) {
+                $this->recordBatchHistory((int) $batchId, request(), 'archived', 'Medicine archived from inventory.');
+            }
 
             DB::commit();
 
             return response()->json([
                 'success' => true,
-                'message' => 'Medicine and linked inventory deleted successfully',
+                'message' => 'Medicine archived successfully',
             ], 200);
         } catch (\Throwable $e) {
             DB::rollBack();
@@ -517,6 +643,75 @@ class MedicineController extends Controller
         Medicine::query()
             ->where('medicine_id', $medicineId)
             ->update(['stocks' => $totalStocks]);
+    }
+
+    private function resolveStockCount(array $data): int
+    {
+        $containerType = strtolower(trim((string) ($data['container_type'] ?? 'none')));
+        $containerCount = (int) ($data['container_count'] ?? 0);
+        $pcsPerContainer = (int) ($data['pcs_per_container'] ?? 0);
+
+        if (in_array($containerType, ['boxes', 'bulk', 'custom'], true) && $containerCount > 0 && $pcsPerContainer > 0) {
+            return $containerCount * $pcsPerContainer;
+        }
+
+        return (int) ($data['stocks'] ?? 0);
+    }
+
+    private function containerPayload(array $data): array
+    {
+        $containerType = strtolower(trim((string) ($data['container_type'] ?? 'none')));
+        if (!in_array($containerType, ['boxes', 'bulk', 'custom'], true)) {
+            $containerType = 'none';
+        }
+
+        return [
+            'container_type' => $containerType,
+            'container_name' => $containerType === 'custom'
+                ? (trim((string) ($data['container_name'] ?? '')) ?: null)
+                : ($containerType === 'boxes' ? 'Boxes' : ($containerType === 'bulk' ? 'Bulk' : null)),
+            'container_count' => $containerType === 'none' ? null : (int) ($data['container_count'] ?? 0),
+            'pcs_per_container' => $containerType === 'none' ? null : (int) ($data['pcs_per_container'] ?? 0),
+        ];
+    }
+
+    private function findMatchingInventory(array $data): ?Inventory
+    {
+        return Inventory::query()
+            ->with(['medicine', 'batch'])
+            ->join('medicines', 'medicines.medicine_id', '=', 'inventories.medicine_id')
+            ->join('batches', 'batches.batch_id', '=', 'inventories.batch_id')
+            ->where('inventories.branch_id', $data['branch_id'])
+            ->where('medicines.medicine_name', $data['medicine_name'])
+            ->where('medicines.generic_name', $data['generic_name'])
+            ->where('medicines.dosage', $data['dosage'])
+            ->where('medicines.unit', $data['unit'])
+            ->where('medicines.type', $data['type'])
+            ->where('batches.batch_number', $data['batch_number'])
+            ->whereDate('batches.expiry_date', $data['expiry_date'])
+            ->whereDate('batches.mfg_date', $data['mfg_date'])
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('medicines.status')
+                    ->orWhere('medicines.status', 'active');
+            })
+            ->where(function ($statusQuery) {
+                $statusQuery->whereNull('batches.status')
+                    ->orWhereNotIn('batches.status', ['archived', 'deleted', 'pulled_out', 'disposed']);
+            })
+            ->select('inventories.*')
+            ->lockForUpdate()
+            ->first();
+    }
+
+    private function recordBatchHistory(int $batchId, Request $request, string $action, string $notes, array $meta = []): void
+    {
+        BatchHistory::query()->create([
+            'batch_id' => $batchId,
+            'user_id' => $request->user()?->user_id,
+            'action' => $action,
+            'notes' => $notes,
+            'meta' => $meta ?: null,
+        ]);
     }
 
     private function normalizeCategoryValues($category)

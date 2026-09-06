@@ -110,7 +110,7 @@ class ControlledDrugController extends Controller
             })
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
-                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->when($search !== '', function ($query) use ($search) {
                 $query->where(function ($nested) use ($search) {
@@ -151,7 +151,7 @@ class ControlledDrugController extends Controller
             })
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
-                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->select(
                 'medicines.medicine_id',
@@ -178,7 +178,7 @@ class ControlledDrugController extends Controller
             ->whereHas('inventories', fn ($query) => $query->whereIn('branch_id', $scopeBranchIds))
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('status')
-                    ->orWhereNotIn('status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->whereDate('expiry_date', '>=', $today)
             ->whereDate('expiry_date', '<=', $today->copy()->addDays(30))
@@ -188,7 +188,7 @@ class ControlledDrugController extends Controller
             ->whereHas('inventories', fn ($query) => $query->whereIn('branch_id', $scopeBranchIds))
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('status')
-                    ->orWhereNotIn('status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->whereDate('expiry_date', '<', $today)
             ->count();

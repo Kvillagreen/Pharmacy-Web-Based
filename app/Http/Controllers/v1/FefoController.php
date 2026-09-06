@@ -4,6 +4,7 @@ namespace App\Http\Controllers\v1;
 
 use App\Http\Controllers\Controller;
 use App\Models\v1\Batch;
+use App\Models\v1\BatchHistory;
 use App\Models\v1\Inventory;
 use App\Services\v1\MedicineQuery;
 use Carbon\Carbon;
@@ -71,7 +72,7 @@ class FefoController extends Controller
         $query->where('branches.status', 'active')
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
-                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->orderBy('batches.expiry_date', 'asc');
 
@@ -100,7 +101,7 @@ class FefoController extends Controller
             ->where('branches.status', 'active')
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
-                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->when($branchId > 0, fn ($q) => $q->where('inventories.branch_id', $branchId))
             ->when($branchId <= 0 && $companyId > 0, fn ($q) => $q->where('branches.company_id', $companyId))
@@ -121,7 +122,7 @@ class FefoController extends Controller
             })
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('status')
-                    ->orWhereNotIn('status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->whereDate('expiry_date', '>=', $today)
             ->whereDate('expiry_date', '<=', $today->copy()->addDays(30))
@@ -136,7 +137,7 @@ class FefoController extends Controller
             })
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('status')
-                    ->orWhereNotIn('status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->whereDate('expiry_date', '>=', $today->copy()->addDays(31))
             ->whereDate('expiry_date', '<=', $today->copy()->addDays(90))
@@ -151,7 +152,7 @@ class FefoController extends Controller
             })
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('status')
-                    ->orWhereNotIn('status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->whereDate('expiry_date', '>=', $today->copy()->addDays(91))
             ->count();
@@ -165,7 +166,7 @@ class FefoController extends Controller
             })
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('status')
-                    ->orWhereNotIn('status', ['pulled_out', 'disposed']);
+                    ->orWhereNotIn('status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->whereDate('expiry_date', '<', $today)
             ->count();
@@ -214,6 +215,73 @@ class FefoController extends Controller
 
     public function show(string $id)
     {
+        $batch = Batch::query()->findOrFail($id);
+        $history = BatchHistory::query()
+            ->where('batch_id', $batch->batch_id)
+            ->orderByDesc('created_at')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'batch' => $batch,
+                'history' => $history,
+            ],
+        ]);
+    }
+
+    public function archived(Request $request)
+    {
+        $companyId = (int) $request->input('company_id', 0);
+        $branchId = (int) $request->input('branch_id', 0);
+
+        $items = Inventory::query()
+            ->join('medicines', 'medicines.medicine_id', '=', 'inventories.medicine_id')
+            ->join('batches', 'batches.batch_id', '=', 'inventories.batch_id')
+            ->join('branches', 'branches.branch_id', '=', 'inventories.branch_id')
+            ->leftJoin('batch_histories', function ($join) {
+                $join->on('batch_histories.batch_id', '=', 'batches.batch_id')
+                    ->whereIn('batch_histories.action', ['archived', 'pulled_out']);
+            })
+            ->whereIn('batches.status', ['archived', 'pulled_out', 'deleted'])
+            ->when($branchId > 0, fn ($q) => $q->where('inventories.branch_id', $branchId))
+            ->when($branchId <= 0 && $companyId > 0, fn ($q) => $q->where('branches.company_id', $companyId))
+            ->select([
+                'batches.batch_id',
+                'batches.batch_number',
+                'batches.status as batch_status',
+                'batches.expiry_date',
+                'batches.mfg_date',
+                'batches.location',
+                'inventories.inventory_id',
+                'inventories.stocks',
+                'medicines.medicine_id',
+                'medicines.medicine_name',
+                'medicines.generic_name',
+                'branches.branch_name',
+                DB::raw('MAX(batch_histories.created_at) as archived_at'),
+            ])
+            ->groupBy(
+                'batches.batch_id',
+                'batches.batch_number',
+                'batches.status',
+                'batches.expiry_date',
+                'batches.mfg_date',
+                'batches.location',
+                'inventories.inventory_id',
+                'inventories.stocks',
+                'medicines.medicine_id',
+                'medicines.medicine_name',
+                'medicines.generic_name',
+                'branches.branch_name'
+            )
+            ->orderByDesc(DB::raw('COALESCE(MAX(batch_histories.created_at), MAX(batches.updated_at))'))
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $items,
+        ]);
     }
 
     public function edit(string $id)
@@ -228,15 +296,26 @@ class FefoController extends Controller
     {
         $batch = Batch::query()->findOrFail($batchId);
 
-        DB::transaction(function () use ($batch) {
+        DB::transaction(function () use ($batch, $request) {
+            $stockBefore = (int) Inventory::query()
+                ->where('batch_id', $batch->batch_id)
+                ->sum('stocks');
+
             $medicineIds = Inventory::query()
                 ->where('batch_id', $batch->batch_id)
                 ->pluck('medicine_id')
                 ->unique();
 
             $batch->update([
-                'status' => 'pulled_out',
+                'status' => 'archived',
             ]);
+
+            $this->recordBatchHistory(
+                $batch->batch_id,
+                $request,
+                'archived',
+                $stockBefore <= 0 ? 'Out-of-stock batch archived from active FEFO inventory.' : 'Batch archived from active FEFO inventory.'
+            );
 
             Inventory::query()
                 ->where('batch_id', $batch->batch_id)
@@ -249,7 +328,7 @@ class FefoController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Expired batch pulled out successfully.',
+            'message' => 'Batch archived successfully.',
         ]);
     }
 
@@ -260,8 +339,14 @@ class FefoController extends Controller
         ]);
 
         $batch = Batch::query()->findOrFail($batchId);
+        $previousLocation = $batch->location;
         $batch->update([
             'location' => trim($data['location']),
+        ]);
+
+        $this->recordBatchHistory($batch->batch_id, $request, 'location_updated', 'Batch location updated.', [
+            'from' => $previousLocation,
+            'to' => $batch->location,
         ]);
 
         return response()->json([
@@ -287,5 +372,16 @@ class FefoController extends Controller
         DB::table('medicines')
             ->where('medicine_id', $medicineId)
             ->update(['stocks' => $totalStocks]);
+    }
+
+    private function recordBatchHistory(int $batchId, Request $request, string $action, string $notes, array $meta = []): void
+    {
+        BatchHistory::query()->create([
+            'batch_id' => $batchId,
+            'user_id' => $request->user()?->user_id,
+            'action' => $action,
+            'notes' => $notes,
+            'meta' => $meta ?: null,
+        ]);
     }
 }

@@ -152,7 +152,7 @@ class SmsController extends Controller
                     ->map(fn (array $message) => [
                         'id' => $message['id'] ?? null,
                         'reference_number' => null,
-                        'template_tag' => ($message['direction'] ?? 'inbound') === 'outbound' ? 'Sent Reply' : 'Incoming Reply',
+                        'template_tag' => null,
                         'direction' => $message['direction'] ?? 'inbound',
                         'from_number' => $message['display_from_number'] ?? $message['from_number'] ?? '',
                         'to_number' => $message['display_to_number'] ?? $message['to_number'] ?? '',
@@ -171,7 +171,7 @@ class SmsController extends Controller
                     'reply_to_number' => $latestCustomerNumber,
                     'normalized_customer_number' => $customerNumber,
                     'reference_number' => null,
-                    'template_tag' => $latestDirection === 'outbound' ? 'Sent Reply' : 'Incoming Reply',
+                    'template_tag' => null,
                     'message_body' => $latest['message_body'] ?? '',
                     'sender_name' => $latest['sender_name'] ?? '',
                     'received_at' => $latest['received_at'] ?? null,

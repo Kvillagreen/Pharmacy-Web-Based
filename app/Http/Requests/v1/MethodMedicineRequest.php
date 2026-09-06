@@ -30,6 +30,10 @@ class MethodMedicineRequest extends FormRequest
             'category' => ['required', 'string'],
             'reorder_level' => ['required', 'int', 'min:0'], // ≥ 0
             'stocks' => ['required', 'int', 'min:0'],       // ≥ 0
+            'container_type' => ['nullable', 'string', 'in:none,boxes,bulk,custom'],
+            'container_name' => ['nullable', 'string', 'max:100'],
+            'container_count' => ['nullable', 'integer', 'min:0'],
+            'pcs_per_container' => ['nullable', 'integer', 'min:0'],
             'dosage' => ['required', 'int', 'min:0'],       // ≥ 0
             'unit' => ['required', 'string'],
             'type' => ['required', 'string'],
@@ -88,6 +92,21 @@ class MethodMedicineRequest extends FormRequest
 
             if ($mfgDate->gt($expiryDate)) {
                 $validator->errors()->add('mfg_date', 'Manufacturing date cannot be after the expiry date.');
+            }
+
+            $containerType = strtolower(trim((string) $this->input('container_type', 'none')));
+            if (in_array($containerType, ['boxes', 'bulk', 'custom'], true)) {
+                if ((int) $this->input('container_count', 0) <= 0) {
+                    $validator->errors()->add('container_count', 'Container stock count must be greater than zero.');
+                }
+
+                if ((int) $this->input('pcs_per_container', 0) <= 0) {
+                    $validator->errors()->add('pcs_per_container', 'Pieces per container must be greater than zero.');
+                }
+
+                if ($containerType === 'custom' && !filled($this->input('container_name'))) {
+                    $validator->errors()->add('container_name', 'Custom container name is required.');
+                }
             }
         });
     }
