@@ -36,9 +36,9 @@ class Transaction extends Model
         'patient_name',
         'membership_id',
         'prescription_path',
-        'prescription_file_uuid',
+        'prescription_file_id',
         'member_id_image_path',
-        'member_id_image_file_uuid',
+        'member_id_image_file_id',
         'documents_submitted',
         'regulated_customer_id',
         'customer_contact_number',
@@ -91,7 +91,7 @@ class Transaction extends Model
 
     public function getPrescriptionUrlAttribute(): ?string
     {
-        if ($this->prescription_file_uuid) {
+        if ($this->prescription_file_id) {
             return url('/api/v1/transaction/' . $this->transaction_id . '/attachments/prescription/download');
         }
 
@@ -109,7 +109,7 @@ class Transaction extends Model
 
     public function getMemberIdImageUrlAttribute(): ?string
     {
-        if ($this->member_id_image_file_uuid) {
+        if ($this->member_id_image_file_id) {
             return url('/api/v1/transaction/' . $this->transaction_id . '/attachments/valid-id/download');
         }
 

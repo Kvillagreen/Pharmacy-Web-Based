@@ -13,7 +13,6 @@ use App\Models\v1\TransactionAttachment;
 use App\Models\v1\TransactionItem;
 use App\Models\v1\UserNotification;
 use App\Services\v1\FilesApi;
-use App\Services\v1\DocumentStorageService;
 use App\Services\v1\MedicineQuery;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -613,11 +612,6 @@ class TransactionController extends Controller
         }
     }
 
-    private function storeTransactionDocument(Request $request, string $field): ?string
-    {
-        return null;
-    }
-
     private function storeTransactionDocuments(Request $request, Transaction $transaction, array $data, ?string $regulatedClassification): array
     {
         if ($regulatedClassification === null) {
@@ -625,7 +619,6 @@ class TransactionController extends Controller
         }
 
         $filesApi = app(FilesApi::class);
-        $localStore = app(DocumentStorageService::class);
         $uploaded = [];
         $failed = [];
 
@@ -650,7 +643,6 @@ class TransactionController extends Controller
             $file = $request->file($spec['field']);
             $metadata = $this->filesApiMetadata($transaction, $data, $spec['category']);
 
-            // create attachment record in pending state first
             $attachment = TransactionAttachment::query()->create([
                 'transaction_id' => $transaction->transaction_id,
                 'uploaded_by' => $request->user()?->user_id,
@@ -664,95 +656,34 @@ class TransactionController extends Controller
             ]);
 
             try {
-                if (app()->environment('production')) {
-                    $remote = $filesApi->upload($file, $spec['category'], $metadata);
-                    $uuid = (string) $remote['uuid'];
+                $remote = $filesApi->upload($file, $spec['category'], $metadata);
+                $fileId = (string) $remote['file_id'];
+                $fileName = (string) $remote['file_name'];
 
-                    $attachment->update([
-                        'remote_uuid' => $uuid,
-                        'status' => 'active',
-                        'metadata' => array_merge($metadata, ['remote' => $remote]),
-                        'uploaded_at' => now(),
-                    ]);
+                $attachment->update([
+                    'remote_file_id' => $fileId,
+                    'remote_file_name' => $fileName,
+                    'status' => 'active',
+                    'metadata' => array_merge($metadata, ['remote' => $remote]),
+                    'uploaded_at' => now(),
+                ]);
 
-                    if ($spec['field'] === 'prescription') {
-                        $transaction->forceFill([
-                            'prescription_file_uuid' => $uuid,
-                            'prescription_path' => 'files-api:' . $uuid,
-                        ])->save();
-                    }
+                if ($spec['field'] === 'prescription') {
+                    $transaction->forceFill([
+                        'prescription_file_id' => $fileId,
+                        'prescription_path' => 'files-api:' . $fileName,
+                    ])->save();
+                }
 
-                    if ($spec['field'] === 'member_id_image') {
-                        $transaction->forceFill([
-                            'member_id_image_file_uuid' => $uuid,
-                            'member_id_image_path' => 'files-api:' . $uuid,
-                        ])->save();
-                    }
-                } else {
-                    // non-production: store locally using Laravel storage
-                    $relativePath = $localStore->store($file, 'transactions/documents', $spec['category']);
-
-                    if ($relativePath === null) {
-                        throw new \RuntimeException('Failed to store file locally.');
-                    }
-
-                    $attachment->update([
-                        'status' => 'active',
-                        'metadata' => array_merge($metadata, ['local' => true, 'path' => $relativePath]),
-                        'uploaded_at' => now(),
-                    ]);
-
-                    if ($spec['field'] === 'prescription') {
-                        $transaction->forceFill([
-                            'prescription_file_uuid' => null,
-                            'prescription_path' => $relativePath,
-                        ])->save();
-                    }
-
-                    if ($spec['field'] === 'member_id_image') {
-                        $transaction->forceFill([
-                            'member_id_image_file_uuid' => null,
-                            'member_id_image_path' => $relativePath,
-                        ])->save();
-                    }
+                if ($spec['field'] === 'member_id_image') {
+                    $transaction->forceFill([
+                        'member_id_image_file_id' => $fileId,
+                        'member_id_image_path' => 'files-api:' . $fileName,
+                    ])->save();
                 }
 
                 $uploaded[] = $attachment->fresh();
             } catch (\Throwable $e) {
-                // Attempt a local fallback if production upload fails
-                try {
-                    if (app()->environment('production')) {
-                        $relativePath = $localStore->store($file, 'transactions/documents', $spec['category']);
-                        if ($relativePath) {
-                            $attachment->update([
-                                'status' => 'active',
-                                'metadata' => array_merge($metadata, ['fallback_local' => true, 'path' => $relativePath, 'failure' => $e->getMessage()]),
-                                'uploaded_at' => now(),
-                            ]);
-
-                            if ($spec['field'] === 'prescription') {
-                                $transaction->forceFill([
-                                    'prescription_file_uuid' => null,
-                                    'prescription_path' => $relativePath,
-                                ])->save();
-                            }
-
-                            if ($spec['field'] === 'member_id_image') {
-                                $transaction->forceFill([
-                                    'member_id_image_file_uuid' => null,
-                                    'member_id_image_path' => $relativePath,
-                                ])->save();
-                            }
-
-                            $uploaded[] = $attachment->fresh();
-                            \Illuminate\Support\Facades\Log::warning('Files API upload failed; used local fallback', ['transaction_id' => $transaction->transaction_id, 'field' => $spec['field'], 'error' => $e->getMessage()]);
-                            continue;
-                        }
-                    }
-                } catch (\Throwable $fallbackEx) {
-                    \Illuminate\Support\Facades\Log::error('Local fallback failed', ['error' => $fallbackEx->getMessage()]);
-                }
-
                 $attachment->update([
                     'status' => 'upload_failed',
                     'metadata' => array_merge($metadata, ['failure' => $e->getMessage()]),

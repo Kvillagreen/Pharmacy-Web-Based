@@ -35,7 +35,7 @@ class TransactionAttachmentController extends Controller
         $transaction = $this->authorizedTransaction($request, $transactionId);
         $attachment = $this->resolveAttachment($transaction, $attachmentId);
 
-        if (!$attachment->remote_uuid || $attachment->status !== 'active') {
+        if (!$attachment->remote_file_name || $attachment->status !== 'active') {
             return response()->json([
                 'success' => false,
                 'message' => 'Attachment is not available for download.',
@@ -43,13 +43,13 @@ class TransactionAttachmentController extends Controller
         }
 
         try {
-            $download = $this->filesApi->downloadToTemporaryFile($attachment->remote_uuid);
+            $download = $this->filesApi->downloadToTemporaryFile($attachment->remote_file_name);
         } catch (FilesApiException $e) {
             return $this->upstreamError($e);
         }
 
         return response()
-            ->download($download['path'], $attachment->original_name ?: ($attachment->remote_uuid . '.bin'), [
+            ->download($download['path'], $attachment->original_name ?: ($attachment->remote_file_name . '.bin'), [
                 'Content-Type' => $download['content_type'],
             ])
             ->deleteFileAfterSend(true);
@@ -60,7 +60,7 @@ class TransactionAttachmentController extends Controller
         $transaction = $this->authorizedTransaction($request, $transactionId);
         $attachment = $this->resolveAttachment($transaction, $attachmentId);
 
-        if (!$attachment->remote_uuid) {
+        if (!$attachment->remote_file_id) {
             return response()->json([
                 'success' => false,
                 'message' => 'Only uploaded attachments can be replaced.',
@@ -71,7 +71,7 @@ class TransactionAttachmentController extends Controller
         $metadata = $this->metadataForAttachment($transaction, $attachment, $request->validated());
 
         try {
-            $remote = $this->filesApi->replace($attachment->remote_uuid, $file, $attachment->category, $metadata);
+            $remote = $this->filesApi->replace($attachment->remote_file_id, $file, $attachment->category, $metadata);
         } catch (FilesApiException $e) {
             $attachment->update(['status' => 'replace_failed']);
             return $this->upstreamError($e);
@@ -81,6 +81,8 @@ class TransactionAttachmentController extends Controller
             'original_name' => $file->getClientOriginalName(),
             'mime_type' => $file->getMimeType(),
             'size_bytes' => $file->getSize(),
+            'remote_file_id' => $remote['file_id'] ?? $attachment->remote_file_id,
+            'remote_file_name' => $remote['file_name'] ?? $attachment->remote_file_name,
             'status' => 'active',
             'metadata' => array_merge($metadata, ['remote' => $remote]),
             'uploaded_at' => now(),
@@ -100,15 +102,15 @@ class TransactionAttachmentController extends Controller
         $metadata = $this->metadataForAttachment($transaction, $attachment, $request->validated());
 
         try {
-            $remote = $attachment->remote_uuid
-                ? $this->filesApi->updateMetadata($attachment->remote_uuid, $metadata)
+            $remote = $attachment->remote_file_id
+                ? $this->filesApi->updateMetadata($attachment->remote_file_id, $metadata)
                 : [];
         } catch (FilesApiException $e) {
             return $this->upstreamError($e);
         }
 
         $attachment->update([
-            'label' => $request->validated('label') ?: $attachment->label,
+            'label' => ($request->validated()['label'] ?? null) ?: $attachment->label,
             'metadata' => array_merge($metadata, ['remote' => $remote]),
         ]);
 
@@ -125,8 +127,8 @@ class TransactionAttachmentController extends Controller
         $attachment = $this->resolveAttachment($transaction, $attachmentId);
 
         try {
-            if ($attachment->remote_uuid) {
-                $this->filesApi->delete($attachment->remote_uuid);
+            if ($attachment->remote_file_id) {
+                $this->filesApi->delete($attachment->remote_file_id);
             }
         } catch (FilesApiException $e) {
             if ($e->statusCode !== 404) {

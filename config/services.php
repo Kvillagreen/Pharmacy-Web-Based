@@ -45,11 +45,10 @@ return [
     ],
 
     'files_api' => [
-        'url' => env('FILES_API_URL', ''),
+        'url' => env('FILES_API_URL', 'https://pharmacy-web-based.kvelop.com/api/upload.php'),
         'key' => env('FILES_API_KEY', ''),
         'timeout' => env('FILES_API_TIMEOUT', 15),
         'connect_timeout' => env('FILES_API_CONNECT_TIMEOUT', 5),
-        'retries' => env('FILES_API_RETRIES', 2),
     ],
 
 ];

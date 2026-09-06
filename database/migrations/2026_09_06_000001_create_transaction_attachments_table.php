@@ -14,7 +14,8 @@ return new class extends Migration
             $table->unsignedBigInteger('uploaded_by')->nullable();
             $table->string('category', 40);
             $table->string('label', 120)->nullable();
-            $table->uuid('remote_uuid')->nullable();
+            $table->string('remote_file_id', 80)->nullable();
+            $table->string('remote_file_name')->nullable();
             $table->string('original_name')->nullable();
             $table->string('mime_type', 120)->nullable();
             $table->unsignedBigInteger('size_bytes')->nullable();
@@ -37,17 +38,17 @@ return new class extends Migration
                 ->cascadeOnUpdate();
 
             $table->index(['transaction_id', 'category'], 'txn_attachments_transaction_category_idx');
-            $table->index(['remote_uuid'], 'txn_attachments_remote_uuid_idx');
+            $table->index(['remote_file_id'], 'txn_attachments_remote_file_id_idx');
             $table->index(['status'], 'txn_attachments_status_idx');
         });
 
         Schema::table('transactions', function (Blueprint $table) {
-            if (!Schema::hasColumn('transactions', 'prescription_file_uuid')) {
-                $table->uuid('prescription_file_uuid')->nullable()->after('prescription_path');
+            if (!Schema::hasColumn('transactions', 'prescription_file_id')) {
+                $table->string('prescription_file_id', 80)->nullable()->after('prescription_path');
             }
 
-            if (!Schema::hasColumn('transactions', 'member_id_image_file_uuid')) {
-                $table->uuid('member_id_image_file_uuid')->nullable()->after('member_id_image_path');
+            if (!Schema::hasColumn('transactions', 'member_id_image_file_id')) {
+                $table->string('member_id_image_file_id', 80)->nullable()->after('member_id_image_path');
             }
         });
     }
@@ -56,8 +57,8 @@ return new class extends Migration
     {
         Schema::table('transactions', function (Blueprint $table) {
             $table->dropColumn([
-                'prescription_file_uuid',
-                'member_id_image_file_uuid',
+                'prescription_file_id',
+                'member_id_image_file_id',
             ]);
         });
 
