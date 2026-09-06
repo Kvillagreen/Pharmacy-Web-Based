@@ -3,6 +3,7 @@ use App\Http\Controllers\v1\BranchController;
 use App\Http\Controllers\v1\MedicineController;
 use App\Http\Controllers\v1\PostController;
 use App\Http\Controllers\v1\TransactionController;
+use App\Http\Controllers\v1\TransactionAttachmentController;
 use App\Http\Controllers\v1\FefoController;
 use App\Http\Controllers\v1\DashboardController;
 use App\Http\Controllers\v1\ControlledDrugController;
@@ -55,6 +56,8 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
         Route::get('/fefo', [FefoController::class, 'index']);
         Route::get('/fefo/{fefo}', [FefoController::class, 'show']);
         Route::get('/transaction', [TransactionController::class, 'index']);
+        Route::get('/transaction/{transaction}/attachments', [TransactionAttachmentController::class, 'index']);
+        Route::get('/transaction/{transaction}/attachments/{attachment}/download', [TransactionAttachmentController::class, 'download']);
         Route::get('/transaction/{transaction}', [TransactionController::class, 'show']);
         Route::get('/inventory-transfer', [InventoryTransferController::class, 'index']);
         Route::get('/company', [CompanyController::class, 'index']);
@@ -80,6 +83,9 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
         Route::apiResource('/fefo', FefoController::class)->except(['index', 'show']);
         Route::apiResource('/transaction', TransactionController::class)->except(['index', 'show']);
         Route::post('/transaction/{transaction}/void', [TransactionController::class, 'void']);
+        Route::post('/transaction/{transaction}/attachments/{attachment}', [TransactionAttachmentController::class, 'replace']);
+        Route::patch('/transaction/{transaction}/attachments/{attachment}', [TransactionAttachmentController::class, 'update']);
+        Route::delete('/transaction/{transaction}/attachments/{attachment}', [TransactionAttachmentController::class, 'destroy']);
         Route::post('/inventory-transfer', [InventoryTransferController::class, 'store']);
         Route::post('/inventory-transfer/{id}/accept', [InventoryTransferController::class, 'accept']);
         Route::post('/inventory-transfer/{id}/decline', [InventoryTransferController::class, 'decline']);

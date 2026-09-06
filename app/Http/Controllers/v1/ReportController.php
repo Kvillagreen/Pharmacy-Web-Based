@@ -385,7 +385,7 @@ class ReportController extends Controller
         ])->values();
 
         $recentTransactions = Transaction::query()
-            ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name'])
+            ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name', 'attachments'])
             ->whereIn('branch_id', $scopeBranchIds)
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->latest('created_at')
@@ -407,7 +407,7 @@ class ReportController extends Controller
             ->values();
 
         $prescribedTransactions = Transaction::query()
-            ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name'])
+            ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name', 'attachments'])
             ->whereIn('branch_id', $scopeBranchIds)
             ->whereIn('regulated_classification', ['controlled', 'mixed'])
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
@@ -702,6 +702,16 @@ class ReportController extends Controller
             'prescription_url' => $transaction->prescription_url,
             'member_id_image_url' => $transaction->member_id_image_url,
             'documents_submitted' => (bool) $transaction->documents_submitted,
+            'attachments' => $transaction->attachments
+                ->whereIn('status', ['active', 'pending_upload', 'upload_failed', 'delete_failed'])
+                ->map(fn ($attachment) => [
+                    'transaction_attachment_id' => $attachment->transaction_attachment_id,
+                    'category' => $attachment->category,
+                    'label' => $attachment->label,
+                    'original_name' => $attachment->original_name,
+                    'status' => $attachment->status,
+                ])
+                ->values(),
             'regulated_details' => $transaction->regulated_details,
         ];
     }

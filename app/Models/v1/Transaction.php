@@ -36,7 +36,9 @@ class Transaction extends Model
         'patient_name',
         'membership_id',
         'prescription_path',
+        'prescription_file_uuid',
         'member_id_image_path',
+        'member_id_image_file_uuid',
         'documents_submitted',
         'regulated_customer_id',
         'customer_contact_number',
@@ -72,6 +74,11 @@ class Transaction extends Model
     {
         return $this->hasMany(TransactionItem::class, 'transaction_id', 'transaction_id');
     }
+
+    public function attachments()
+    {
+        return $this->hasMany(TransactionAttachment::class, 'transaction_id', 'transaction_id');
+    }
     public function branch()
     {
         return $this->belongsTo(Branch::class, 'branch_id', 'branch_id');
@@ -84,6 +91,10 @@ class Transaction extends Model
 
     public function getPrescriptionUrlAttribute(): ?string
     {
+        if ($this->prescription_file_uuid) {
+            return url('/api/v1/transaction/' . $this->transaction_id . '/attachments/prescription/download');
+        }
+
         if (!$this->prescription_path) {
             return null;
         }
@@ -98,6 +109,10 @@ class Transaction extends Model
 
     public function getMemberIdImageUrlAttribute(): ?string
     {
+        if ($this->member_id_image_file_uuid) {
+            return url('/api/v1/transaction/' . $this->transaction_id . '/attachments/valid-id/download');
+        }
+
         if (!$this->member_id_image_path) {
             return null;
         }

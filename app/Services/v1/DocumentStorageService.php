@@ -29,7 +29,7 @@ class DocumentStorageService
 
     protected function storeInHostingerFiles(UploadedFile $file, string $category): string
     {
-        $apiUrl = rtrim((string) config('transactions.hostinger_files_api_url', env('TRANSACTION_HOSTINGER_FILES_API_URL')), '/');
+        $apiUrl = $this->normalizeHostingerApiUrl((string) config('transactions.hostinger_files_api_url', env('TRANSACTION_HOSTINGER_FILES_API_URL')));
         $apiKey = (string) config('transactions.hostinger_files_api_key', env('TRANSACTION_HOSTINGER_FILES_API_KEY'));
 
         if ($apiUrl === '' || $apiKey === '') {
@@ -58,7 +58,15 @@ class DocumentStorageService
         ]);
 
         if ($response->failed()) {
-            throw new \RuntimeException('Unable to upload document to Hostinger Files API.');
+            $body = $response->body();
+            $status = $response->status();
+
+            throw new \RuntimeException(sprintf(
+                'Unable to upload document to Hostinger Files API. URL: %s | Status: %s | Response: %s',
+                $apiUrl,
+                $status,
+                is_string($body) ? substr($body, 0, 500) : json_encode($body)
+            ));
         }
 
         $payload = $response->json();
@@ -71,6 +79,28 @@ class DocumentStorageService
             ?? $payload['download_url']
             ?? $payload['path']
             ?? $apiUrl . '/' . ($payload['uuid'] ?? Str::uuid()->toString());
+    }
+
+    protected function normalizeHostingerApiUrl(string $apiUrl): string
+    {
+        $apiUrl = trim($apiUrl);
+
+        if ($apiUrl === '') {
+            return '';
+        }
+
+        $apiUrl = rtrim($apiUrl, '/');
+        $path = parse_url($apiUrl, PHP_URL_PATH) ?: '';
+
+        if ($path === '' || $path === '/') {
+            return $apiUrl . '/files';
+        }
+
+        if (str_ends_with(strtolower($path), '/files')) {
+            return $apiUrl;
+        }
+
+        return $apiUrl . '/files';
     }
 
     protected function buildLocalFilename(UploadedFile $file): string

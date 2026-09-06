@@ -9,9 +9,10 @@ use App\Models\v1\Inventory;
 use App\Models\v1\Medicine;
 use App\Models\v1\RegulatedCustomer;
 use App\Models\v1\Transaction;
+use App\Models\v1\TransactionAttachment;
 use App\Models\v1\TransactionItem;
 use App\Models\v1\UserNotification;
-use App\Services\v1\DocumentStorageService;
+use App\Services\v1\FilesApi;
 use App\Services\v1\MedicineQuery;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -296,6 +297,7 @@ class TransactionController extends Controller
     {
         DB::beginTransaction();
         $lock = null;
+        $pendingDocumentUploads = [];
 
         try {
             $data = $request->validated();
@@ -373,8 +375,6 @@ class TransactionController extends Controller
                 'reference_number' => in_array(($data['payment_method'] ?? ''), ['Card', 'Gcash'], true)
                     ? ($data['reference_number'] ?? null)
                     : null,
-                'prescription_path' => $this->storeTransactionDocument($request, 'prescription'),
-                'member_id_image_path' => $this->storeTransactionDocument($request, 'member_id_image'),
                 'documents_submitted' => $this->documentsWereSubmitted($request, $regulatedClassification),
                 'regulated_customer_id' => $regulatedCustomer?->regulated_customer_id,
                 'customer_contact_number' => $regulatedCustomer?->contact_number,
@@ -448,6 +448,18 @@ class TransactionController extends Controller
             $this->createTransactionNotifications($transaction);
 
             DB::commit();
+
+            $pendingDocumentUploads = $this->storeTransactionDocuments($request, $transaction, $data, $regulatedClassification);
+
+            if (!empty($pendingDocumentUploads['failed'])) {
+                return response()->json([
+                    'message' => 'Transaction created, but one or more documents failed to upload.',
+                    'data' => $transaction->fresh(['attachments']),
+                    'document_errors' => $pendingDocumentUploads['failed'],
+                ], 502);
+            }
+
+            $transaction->load('attachments');
 
             return response()->json([
                 'message' => 'Transaction created successfully',
@@ -602,21 +614,112 @@ class TransactionController extends Controller
 
     private function storeTransactionDocument(Request $request, string $field): ?string
     {
-        if (!$request->hasFile($field)) {
-            return null;
+        return null;
+    }
+
+    private function storeTransactionDocuments(Request $request, Transaction $transaction, array $data, ?string $regulatedClassification): array
+    {
+        if ($regulatedClassification === null) {
+            return ['uploaded' => [], 'failed' => []];
         }
 
-        $category = match ($field) {
-            'prescription' => 'prescription',
-            'member_id_image' => 'valid_id',
-            default => 'document',
-        };
+        $filesApi = app(FilesApi::class);
+        $uploaded = [];
+        $failed = [];
 
-        return app(DocumentStorageService::class)->store(
-            $request->file($field),
-            'transactions/documents',
-            $category,
-        );
+        $documentSpecs = [];
+        if ($request->hasFile('prescription')) {
+            $documentSpecs[] = [
+                'field' => 'prescription',
+                'category' => in_array($regulatedClassification, ['dangerous', 'mixed'], true) ? 'dangerous_drug' : 'prescription',
+                'label' => in_array($regulatedClassification, ['dangerous', 'mixed'], true) ? 'Yellow Prescription' : 'Prescription',
+            ];
+        }
+
+        if ($request->hasFile('member_id_image')) {
+            $documentSpecs[] = [
+                'field' => 'member_id_image',
+                'category' => 'valid_id',
+                'label' => 'Valid ID / Supporting Image',
+            ];
+        }
+
+        foreach ($documentSpecs as $spec) {
+            $file = $request->file($spec['field']);
+            $metadata = $this->filesApiMetadata($transaction, $data, $spec['category']);
+            $attachment = TransactionAttachment::query()->create([
+                'transaction_id' => $transaction->transaction_id,
+                'uploaded_by' => $request->user()?->user_id,
+                'category' => $spec['category'],
+                'label' => $spec['label'],
+                'original_name' => $file->getClientOriginalName(),
+                'mime_type' => $file->getMimeType(),
+                'size_bytes' => $file->getSize(),
+                'status' => 'pending_upload',
+                'metadata' => $metadata,
+            ]);
+
+            try {
+                $remote = $filesApi->upload($file, $spec['category'], $metadata);
+                $uuid = (string) $remote['uuid'];
+                $attachment->update([
+                    'remote_uuid' => $uuid,
+                    'status' => 'active',
+                    'metadata' => array_merge($metadata, ['remote' => $remote]),
+                    'uploaded_at' => now(),
+                ]);
+
+                $uploaded[] = $attachment->fresh();
+
+                if ($spec['field'] === 'prescription') {
+                    $transaction->forceFill([
+                        'prescription_file_uuid' => $uuid,
+                        'prescription_path' => 'files-api:' . $uuid,
+                    ])->save();
+                }
+
+                if ($spec['field'] === 'member_id_image') {
+                    $transaction->forceFill([
+                        'member_id_image_file_uuid' => $uuid,
+                        'member_id_image_path' => 'files-api:' . $uuid,
+                    ])->save();
+                }
+            } catch (\Throwable $e) {
+                $attachment->update([
+                    'status' => 'upload_failed',
+                    'metadata' => array_merge($metadata, ['failure' => $e->getMessage()]),
+                ]);
+                $failed[] = [
+                    'field' => $spec['field'],
+                    'message' => $e->getMessage(),
+                ];
+            }
+        }
+
+        return ['uploaded' => $uploaded, 'failed' => $failed];
+    }
+
+    private function filesApiMetadata(Transaction $transaction, array $data, string $category): array
+    {
+        if (in_array($category, ['document', 'valid_id'], true)) {
+            return [];
+        }
+
+        $metadata = [
+            'record_reference' => 'transaction:' . $transaction->transaction_id,
+            'patient_reference' => 'patient:' . md5(strtolower(trim((string) ($data['patient_name'] ?? ''))) . '|' . (string) ($data['customer_id_number'] ?? '') . '|' . (string) ($data['customer_contact_number'] ?? '')),
+            'prescriber_name' => trim((string) ($data['prescriber_name'] ?? 'Unknown Prescriber')),
+            'prescription_reference' => trim((string) ($data['yellow_prescription_serial_number'] ?? '')) ?: ('transaction:' . $transaction->transaction_id),
+            'authorization_reference' => trim((string) ($data['prescriber_prc_license_number'] ?? '')) ?: null,
+        ];
+
+        if ($category === 'dangerous_drug') {
+            $metadata['drug_name'] = trim((string) ($data['prescribed_brand_name'] ?? $data['prescribed_generic_name'] ?? 'Regulated Drug'));
+            $metadata['quantity'] = (string) max(1, (int) ($data['prescribed_quantity_dispensed'] ?? 1));
+            $metadata['unit'] = 'pcs';
+        }
+
+        return $metadata;
     }
 
     private function documentsWereSubmitted(Request $request, ?string $regulatedClassification): bool

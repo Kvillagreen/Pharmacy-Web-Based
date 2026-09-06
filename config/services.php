@@ -44,4 +44,11 @@ return [
         'slot' => env('SMS_SLOT', 0),
     ],
 
+    'files_api' => [
+        'url' => env('FILES_API_URL', ''),
+        'key' => env('FILES_API_KEY', ''),
+        'timeout' => env('FILES_API_TIMEOUT', 15),
+        'connect_timeout' => env('FILES_API_CONNECT_TIMEOUT', 5),
+    ],
+
 ];
