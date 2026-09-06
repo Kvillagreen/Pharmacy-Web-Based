@@ -11,6 +11,7 @@ use App\Models\v1\RegulatedCustomer;
 use App\Models\v1\Transaction;
 use App\Models\v1\TransactionItem;
 use App\Models\v1\UserNotification;
+use App\Services\v1\DocumentStorageService;
 use App\Services\v1\MedicineQuery;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -605,7 +606,17 @@ class TransactionController extends Controller
             return null;
         }
 
-        return $request->file($field)->store('transactions/documents', config('transactions.documents_disk', 'public'));
+        $category = match ($field) {
+            'prescription' => 'prescription',
+            'member_id_image' => 'document',
+            default => 'document',
+        };
+
+        return app(DocumentStorageService::class)->store(
+            $request->file($field),
+            'transactions/documents',
+            $category,
+        );
     }
 
     private function documentsWereSubmitted(Request $request, ?string $regulatedClassification): bool

@@ -33,11 +33,24 @@ class FortmedSmsService
 
     public function sendMessage(array $payload): array
     {
+        $fromNumber = trim((string) ($payload['FromNumber'] ?? config('services.mysmsgate_sms.from_number', '')));
+        $senderName = trim((string) ($payload['SenderName'] ?? config('services.mysmsgate_sms.sender_name', '')));
+
         $providerPayload = [
             'to' => $payload['ToNumber'] ?? '',
             'message' => $payload['MessageBody'] ?? '',
             'slot' => (int) config('services.mysmsgate_sms.slot', 0),
         ];
+
+        if ($fromNumber !== '') {
+            $providerPayload['from'] = $fromNumber;
+            $providerPayload['from_number'] = $fromNumber;
+        }
+
+        if ($senderName !== '') {
+            $providerPayload['sender_name'] = $senderName;
+            $providerPayload['sender'] = $senderName;
+        }
 
         $response = $this->performRequest(
             'POST',

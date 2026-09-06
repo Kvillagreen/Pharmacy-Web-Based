@@ -88,6 +88,10 @@ class Transaction extends Model
             return null;
         }
 
+        if (str_starts_with((string) $this->prescription_path, 'http')) {
+            return $this->resolveDocumentUrl((string) $this->prescription_path);
+        }
+
         $url = Storage::disk(config('transactions.documents_disk', 'public'))->url($this->prescription_path);
         return $this->resolveDocumentUrl($url);
     }
@@ -96,6 +100,10 @@ class Transaction extends Model
     {
         if (!$this->member_id_image_path) {
             return null;
+        }
+
+        if (str_starts_with((string) $this->member_id_image_path, 'http')) {
+            return $this->resolveDocumentUrl((string) $this->member_id_image_path);
         }
 
         $url = Storage::disk(config('transactions.documents_disk', 'public'))->url($this->member_id_image_path);

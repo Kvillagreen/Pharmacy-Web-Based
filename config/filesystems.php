@@ -47,6 +47,15 @@ return [
             'report' => false,
         ],
 
+        'hostinger_files' => [
+            'driver' => 'local',
+            'root' => storage_path('app/hostinger-files'),
+            'url' => rtrim(env('APP_URL', 'http://localhost'), '/').'/hostinger-files',
+            'visibility' => 'public',
+            'throw' => false,
+            'report' => false,
+        ],
+
         's3' => [
             'driver' => 's3',
             'key' => env('AWS_ACCESS_KEY_ID'),
