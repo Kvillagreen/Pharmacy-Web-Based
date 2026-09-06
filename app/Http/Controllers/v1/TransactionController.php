@@ -608,7 +608,7 @@ class TransactionController extends Controller
 
         $category = match ($field) {
             'prescription' => 'prescription',
-            'member_id_image' => 'document',
+            'member_id_image' => 'valid_id',
             default => 'document',
         };
 

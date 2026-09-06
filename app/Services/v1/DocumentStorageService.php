@@ -36,7 +36,7 @@ class DocumentStorageService
             throw new \RuntimeException('Hostinger Files API is not configured. Set TRANSACTION_HOSTINGER_FILES_API_URL and TRANSACTION_HOSTINGER_FILES_API_KEY in the environment.');
         }
 
-        $allowedCategories = ['document', 'prescription', 'dangerous_drug'];
+        $allowedCategories = ['document', 'prescription', 'dangerous_drug', 'valid_id'];
         $normalizedCategory = in_array($category, $allowedCategories, true) ? $category : 'document';
 
         $fileContents = file_get_contents($file->getRealPath());

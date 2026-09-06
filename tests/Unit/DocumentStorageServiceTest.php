@@ -49,4 +49,30 @@ class DocumentStorageServiceTest extends TestCase
             && str_contains((string) $request->body(), 'name="category"')
             && str_contains((string) $request->body(), 'prescription'));
     }
+
+    public function test_it_maps_valid_id_and_dangerous_drug_categories_for_production_uploads(): void
+    {
+        app()->detectEnvironment(fn () => 'production');
+        config()->set('transactions.hostinger_files_api_url', 'https://example.com/files');
+        config()->set('transactions.hostinger_files_api_key', 'secret-key');
+
+        Http::fake([
+            'https://example.com/files' => Http::response([
+                'uuid' => 'valid-id-uuid',
+                'url' => 'https://example.com/files/valid-id-uuid',
+            ], 200),
+        ]);
+
+        $validId = UploadedFile::fake()->create('valid-id.jpg', 120, 'image/jpeg');
+        $dangerousDrug = UploadedFile::fake()->create('dangerous-drug.pdf', 120, 'application/pdf');
+
+        (new DocumentStorageService())->store($validId, 'transactions/documents', 'valid_id');
+        (new DocumentStorageService())->store($dangerousDrug, 'transactions/documents', 'dangerous_drug');
+
+        Http::assertSentCount(2);
+        Http::assertSent(fn ($request) => str_contains((string) $request->body(), 'name="category"')
+            && str_contains((string) $request->body(), 'valid_id'));
+        Http::assertSent(fn ($request) => str_contains((string) $request->body(), 'name="category"')
+            && str_contains((string) $request->body(), 'dangerous_drug'));
+    }
 }
