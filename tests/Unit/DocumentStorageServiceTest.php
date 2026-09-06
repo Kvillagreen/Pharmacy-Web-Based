@@ -25,12 +25,12 @@ class DocumentStorageServiceTest extends TestCase
         Storage::disk('public')->assertExists($path);
     }
 
-    public function test_it_uploads_to_hostinger_files_api_in_production(): void
+    public function test_it_uploads_to_hostinger_files_api_in_production_without_api_key_header(): void
     {
         app()->detectEnvironment(fn () => 'production');
         config()->set('transactions.documents_disk', 'hostinger_files');
         config()->set('transactions.hostinger_files_api_url', 'https://example.com/files');
-        config()->set('transactions.hostinger_files_api_key', 'secret-key');
+        config()->set('transactions.hostinger_files_api_key', '');
 
         Http::fake([
             'https://example.com/files' => Http::response([
@@ -44,7 +44,7 @@ class DocumentStorageServiceTest extends TestCase
         $path = (new DocumentStorageService())->store($file, 'transactions/documents', 'prescription');
 
         $this->assertSame('https://example.com/files/abc123', $path);
-        Http::assertSent(fn ($request) => $request->hasHeader('X-API-Key', 'secret-key')
+        Http::assertSent(fn ($request) => ! $request->hasHeader('X-API-Key')
             && $request->url() === 'https://example.com/files'
             && str_contains((string) $request->body(), 'name="category"')
             && str_contains((string) $request->body(), 'prescription'));

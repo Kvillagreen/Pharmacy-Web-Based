@@ -30,10 +30,9 @@ class DocumentStorageService
     protected function storeInHostingerFiles(UploadedFile $file, string $category): string
     {
         $apiUrl = $this->normalizeHostingerApiUrl((string) config('transactions.hostinger_files_api_url', env('TRANSACTION_HOSTINGER_FILES_API_URL')));
-        $apiKey = (string) config('transactions.hostinger_files_api_key', env('TRANSACTION_HOSTINGER_FILES_API_KEY'));
 
-        if ($apiUrl === '' || $apiKey === '') {
-            throw new \RuntimeException('Hostinger Files API is not configured. Set TRANSACTION_HOSTINGER_FILES_API_URL and TRANSACTION_HOSTINGER_FILES_API_KEY in the environment.');
+        if ($apiUrl === '') {
+            throw new \RuntimeException('Hostinger Files API is not configured. Set TRANSACTION_HOSTINGER_FILES_API_URL in the environment.');
         }
 
         $allowedCategories = ['document', 'prescription', 'dangerous_drug', 'valid_id'];
@@ -45,9 +44,7 @@ class DocumentStorageService
             $fileContents = $file->getContent();
         }
 
-        $response = Http::withHeaders([
-            'X-API-Key' => $apiKey,
-        ])->asMultipart()->post($apiUrl, [
+        $response = Http::asMultipart()->post($apiUrl, [
             ['name' => 'category', 'contents' => $normalizedCategory],
             [
                 'name' => 'file',

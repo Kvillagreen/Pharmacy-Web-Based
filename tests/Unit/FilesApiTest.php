@@ -10,10 +10,10 @@ use Tests\TestCase;
 
 class FilesApiTest extends TestCase
 {
-    public function test_it_uploads_to_configured_hostinger_upload_script_with_api_key(): void
+    public function test_it_uploads_to_configured_hostinger_upload_script_without_api_key_header(): void
     {
         config()->set('services.files_api.url', 'https://pharmacy-web-based.kvelop.com/api/upload.php');
-        config()->set('services.files_api.key', 'server-secret');
+        config()->set('services.files_api.key', '');
 
         Http::fake([
             'https://pharmacy-web-based.kvelop.com/api/upload.php' => Http::response([
@@ -36,7 +36,7 @@ class FilesApiTest extends TestCase
         $this->assertSame('42', $result['file_id']);
         $this->assertSame('stored.pdf', $result['file_name']);
         Http::assertSent(fn ($request) => $request->url() === 'https://pharmacy-web-based.kvelop.com/api/upload.php'
-            && $request->hasHeader('X-API-Key', 'server-secret')
+            && ! $request->hasHeader('X-API-Key')
             && str_contains((string) $request->body(), 'name="category"')
             && str_contains((string) $request->body(), 'prescription'));
     }
@@ -44,7 +44,7 @@ class FilesApiTest extends TestCase
     public function test_it_rejects_non_https_api_urls(): void
     {
         config()->set('services.files_api.url', 'http://pharmacy-web-based.kvelop.com/api/upload.php');
-        config()->set('services.files_api.key', 'server-secret');
+        config()->set('services.files_api.key', '');
 
         $this->expectException(FilesApiException::class);
         $this->expectExceptionMessage('FILES_API_URL must use HTTPS.');
@@ -52,10 +52,10 @@ class FilesApiTest extends TestCase
         (new FilesApi())->metadata('42');
     }
 
-    public function test_it_downloads_from_private_view_script_to_temporary_file(): void
+    public function test_it_downloads_from_private_view_script_to_temporary_file_without_api_key_header(): void
     {
         config()->set('services.files_api.url', 'https://pharmacy-web-based.kvelop.com/api/upload.php');
-        config()->set('services.files_api.key', 'server-secret');
+        config()->set('services.files_api.key', '');
 
         Http::fake([
             'https://pharmacy-web-based.kvelop.com/api/view.php?file_name=stored.pdf' => Http::response('%PDF-test', 200, [
@@ -71,6 +71,6 @@ class FilesApiTest extends TestCase
         @unlink($download['path']);
 
         Http::assertSent(fn ($request) => $request->url() === 'https://pharmacy-web-based.kvelop.com/api/view.php?file_name=stored.pdf'
-            && $request->hasHeader('X-API-Key', 'server-secret'));
+            && ! $request->hasHeader('X-API-Key'));
     }
 }

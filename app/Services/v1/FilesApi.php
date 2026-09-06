@@ -122,13 +122,7 @@ class FilesApi
 
     private function pendingRequest()
     {
-        $apiKey = trim((string) config('services.files_api.key'));
-        if ($apiKey === '') {
-            throw new FilesApiException('Files API is not configured. Set FILES_API_KEY on the server.');
-        }
-
-        return Http::withHeaders(['X-API-Key' => $apiKey])
-            ->acceptJson()
+        return Http::acceptJson()
             ->timeout((int) config('services.files_api.timeout', 15))
             ->connectTimeout((int) config('services.files_api.connect_timeout', 5))
             ->withOptions([
