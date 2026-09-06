@@ -719,6 +719,40 @@ class TransactionController extends Controller
 
                 $uploaded[] = $attachment->fresh();
             } catch (\Throwable $e) {
+                // Attempt a local fallback if production upload fails
+                try {
+                    if (app()->environment('production')) {
+                        $relativePath = $localStore->store($file, 'transactions/documents', $spec['category']);
+                        if ($relativePath) {
+                            $attachment->update([
+                                'status' => 'active',
+                                'metadata' => array_merge($metadata, ['fallback_local' => true, 'path' => $relativePath, 'failure' => $e->getMessage()]),
+                                'uploaded_at' => now(),
+                            ]);
+
+                            if ($spec['field'] === 'prescription') {
+                                $transaction->forceFill([
+                                    'prescription_file_uuid' => null,
+                                    'prescription_path' => $relativePath,
+                                ])->save();
+                            }
+
+                            if ($spec['field'] === 'member_id_image') {
+                                $transaction->forceFill([
+                                    'member_id_image_file_uuid' => null,
+                                    'member_id_image_path' => $relativePath,
+                                ])->save();
+                            }
+
+                            $uploaded[] = $attachment->fresh();
+                            \Illuminate\Support\Facades\Log::warning('Files API upload failed; used local fallback', ['transaction_id' => $transaction->transaction_id, 'field' => $spec['field'], 'error' => $e->getMessage()]);
+                            continue;
+                        }
+                    }
+                } catch (\Throwable $fallbackEx) {
+                    \Illuminate\Support\Facades\Log::error('Local fallback failed', ['error' => $fallbackEx->getMessage()]);
+                }
+
                 $attachment->update([
                     'status' => 'upload_failed',
                     'metadata' => array_merge($metadata, ['failure' => $e->getMessage()]),
