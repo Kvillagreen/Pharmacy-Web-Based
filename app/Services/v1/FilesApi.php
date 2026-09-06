@@ -3,6 +3,7 @@
 namespace App\Services\v1;
 
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -229,7 +230,18 @@ class FilesApi
             return;
         }
 
-        $body = $response->json();
+        // Log unexpected response for debugging deployment issues (502s etc.)
+        try {
+            $body = $response->json();
+        } catch (\Throwable $e) {
+            $body = $response->body();
+        }
+
+        Log::error('Files API unexpected response', [
+            'status' => $response->status(),
+            'body' => is_string($body) ? $body : json_encode($body),
+        ]);
+
         $message = is_array($body)
             ? (string) ($body['message'] ?? $body['error'] ?? $fallback)
             : $fallback;

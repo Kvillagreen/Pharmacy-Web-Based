@@ -13,6 +13,7 @@ use App\Models\v1\TransactionAttachment;
 use App\Models\v1\TransactionItem;
 use App\Models\v1\UserNotification;
 use App\Services\v1\FilesApi;
+use App\Services\v1\DocumentStorageService;
 use App\Services\v1\MedicineQuery;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -624,6 +625,7 @@ class TransactionController extends Controller
         }
 
         $filesApi = app(FilesApi::class);
+        $localStore = app(DocumentStorageService::class);
         $uploaded = [];
         $failed = [];
 
@@ -647,6 +649,8 @@ class TransactionController extends Controller
         foreach ($documentSpecs as $spec) {
             $file = $request->file($spec['field']);
             $metadata = $this->filesApiMetadata($transaction, $data, $spec['category']);
+
+            // create attachment record in pending state first
             $attachment = TransactionAttachment::query()->create([
                 'transaction_id' => $transaction->transaction_id,
                 'uploaded_by' => $request->user()?->user_id,
@@ -660,30 +664,60 @@ class TransactionController extends Controller
             ]);
 
             try {
-                $remote = $filesApi->upload($file, $spec['category'], $metadata);
-                $uuid = (string) $remote['uuid'];
-                $attachment->update([
-                    'remote_uuid' => $uuid,
-                    'status' => 'active',
-                    'metadata' => array_merge($metadata, ['remote' => $remote]),
-                    'uploaded_at' => now(),
-                ]);
+                if (app()->environment('production')) {
+                    $remote = $filesApi->upload($file, $spec['category'], $metadata);
+                    $uuid = (string) $remote['uuid'];
+
+                    $attachment->update([
+                        'remote_uuid' => $uuid,
+                        'status' => 'active',
+                        'metadata' => array_merge($metadata, ['remote' => $remote]),
+                        'uploaded_at' => now(),
+                    ]);
+
+                    if ($spec['field'] === 'prescription') {
+                        $transaction->forceFill([
+                            'prescription_file_uuid' => $uuid,
+                            'prescription_path' => 'files-api:' . $uuid,
+                        ])->save();
+                    }
+
+                    if ($spec['field'] === 'member_id_image') {
+                        $transaction->forceFill([
+                            'member_id_image_file_uuid' => $uuid,
+                            'member_id_image_path' => 'files-api:' . $uuid,
+                        ])->save();
+                    }
+                } else {
+                    // non-production: store locally using Laravel storage
+                    $relativePath = $localStore->store($file, 'transactions/documents', $spec['category']);
+
+                    if ($relativePath === null) {
+                        throw new \RuntimeException('Failed to store file locally.');
+                    }
+
+                    $attachment->update([
+                        'status' => 'active',
+                        'metadata' => array_merge($metadata, ['local' => true, 'path' => $relativePath]),
+                        'uploaded_at' => now(),
+                    ]);
+
+                    if ($spec['field'] === 'prescription') {
+                        $transaction->forceFill([
+                            'prescription_file_uuid' => null,
+                            'prescription_path' => $relativePath,
+                        ])->save();
+                    }
+
+                    if ($spec['field'] === 'member_id_image') {
+                        $transaction->forceFill([
+                            'member_id_image_file_uuid' => null,
+                            'member_id_image_path' => $relativePath,
+                        ])->save();
+                    }
+                }
 
                 $uploaded[] = $attachment->fresh();
-
-                if ($spec['field'] === 'prescription') {
-                    $transaction->forceFill([
-                        'prescription_file_uuid' => $uuid,
-                        'prescription_path' => 'files-api:' . $uuid,
-                    ])->save();
-                }
-
-                if ($spec['field'] === 'member_id_image') {
-                    $transaction->forceFill([
-                        'member_id_image_file_uuid' => $uuid,
-                        'member_id_image_path' => 'files-api:' . $uuid,
-                    ])->save();
-                }
             } catch (\Throwable $e) {
                 $attachment->update([
                     'status' => 'upload_failed',
