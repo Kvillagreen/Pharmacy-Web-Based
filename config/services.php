@@ -45,7 +45,8 @@ return [
     ],
 
     'files_api' => [
-        'url' => env('FILES_API_URL', 'https://pharmacy-web-based.kvelop.com/api/upload.php'),
+        'use_local_storage' => env('FILES_API_USE_LOCAL_STORAGE', false),
+        'url' => env('FILES_API_URL', 'https://pharmacy-web-based.kvelop.com/api/upload'),
         'key' => env('FILES_API_KEY', ''),
         'timeout' => env('FILES_API_TIMEOUT', 15),
         'connect_timeout' => env('FILES_API_CONNECT_TIMEOUT', 5),

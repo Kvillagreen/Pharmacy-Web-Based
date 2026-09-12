@@ -5,6 +5,7 @@ namespace App\Services\v1;
 use Illuminate\Http\Client\Response;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 
 class FilesApi
 {
@@ -13,6 +14,10 @@ class FilesApi
     public function upload(UploadedFile $file, string $category, array $metadata = []): array
     {
         $category = $this->normalizeCategory($category);
+
+        if (config('services.files_api.use_local_storage', false)) {
+            return $this->uploadToLocalStorage($file, $category);
+        }
 
         $response = $this->pendingRequest()
             ->attach(
@@ -32,6 +37,10 @@ class FilesApi
 
     public function list(array $filters = []): array
     {
+        if (config('services.files_api.use_local_storage', false)) {
+            return [];
+        }
+
         $response = $this->pendingRequest()->get($this->endpoint('files.php'), array_filter([
             'id' => $filters['id'] ?? null,
         ], fn ($value) => $value !== null && $value !== ''));
@@ -48,6 +57,10 @@ class FilesApi
 
     public function metadata(string $fileId): array
     {
+        if (config('services.files_api.use_local_storage', false)) {
+            return [];
+        }
+
         $response = $this->pendingRequest()->get($this->endpoint('files.php'), ['id' => $fileId]);
         $this->throwIfUnexpected($response, [200], 'Unable to load file metadata.');
 
@@ -57,6 +70,31 @@ class FilesApi
     public function replace(string $fileId, UploadedFile $file, string $category, array $metadata = []): array
     {
         $category = $this->normalizeCategory($category);
+
+        if (config('services.files_api.use_local_storage', false)) {
+            $disk = Storage::disk(config('transactions.documents_disk', 'public'));
+            $disk->delete((string) $fileId);
+            $storedPath = $disk->putFileAs('transactions/documents', $file, $this->buildLocalStorageFilename($file));
+
+            if ($storedPath === false) {
+                throw new FilesApiException('Unable to store file locally.');
+            }
+
+            return [
+                'file_id' => $storedPath,
+                'file_name' => $storedPath,
+                'original_name' => $file->getClientOriginalName(),
+                'format' => strtolower($file->getClientOriginalExtension() ?: pathinfo($file->getClientOriginalName(), PATHINFO_EXTENSION)),
+                'category' => $category,
+                'raw' => ['success' => true, 'data' => [
+                    'id' => $storedPath,
+                    'file_name' => $storedPath,
+                    'original_name' => $file->getClientOriginalName(),
+                    'format' => strtolower($file->getClientOriginalExtension() ?: pathinfo($file->getClientOriginalName(), PATHINFO_EXTENSION)),
+                    'category' => $category,
+                ]],
+            ];
+        }
 
         $response = $this->pendingRequest()
             ->attach(
@@ -77,6 +115,10 @@ class FilesApi
 
     public function updateMetadata(string $fileId, array $metadata): array
     {
+        if (config('services.files_api.use_local_storage', false)) {
+            return [];
+        }
+
         $category = isset($metadata['category']) ? $this->normalizeCategory((string) $metadata['category']) : null;
         if ($category === null) {
             return $this->metadata($fileId);
@@ -94,6 +136,11 @@ class FilesApi
 
     public function delete(string $fileId): void
     {
+        if (config('services.files_api.use_local_storage', false)) {
+            Storage::disk(config('transactions.documents_disk', 'public'))->delete((string) $fileId);
+            return;
+        }
+
         $response = $this->pendingRequest()->delete($this->endpoint('delete.php') . '?id=' . rawurlencode($fileId));
 
         $this->throwIfUnexpected($response, [200, 404], 'Unable to delete file.');
@@ -101,6 +148,19 @@ class FilesApi
 
     public function downloadToTemporaryFile(string $fileName): array
     {
+        if (config('services.files_api.use_local_storage', false)) {
+            $disk = Storage::disk(config('transactions.documents_disk', 'public'));
+            if (!$disk->exists((string) $fileName)) {
+                throw new FilesApiException('Unable to download file.');
+            }
+
+            $path = $disk->path((string) $fileName);
+            return [
+                'path' => $path,
+                'content_type' => $disk->mimeType((string) $fileName) ?: 'application/octet-stream',
+            ];
+        }
+
         $response = $this->pendingRequest()
             ->accept('*/*')
             ->get($this->endpoint('view.php'), ['file_name' => $fileName]);
@@ -142,11 +202,47 @@ class FilesApi
             throw new FilesApiException('FILES_API_URL must use HTTPS.');
         }
 
+        if (str_ends_with(strtolower($baseUrl), '/upload')) {
+            return substr($baseUrl, 0, -strlen('upload')) . pathinfo($script, PATHINFO_FILENAME);
+        }
+
         if (str_ends_with(strtolower($baseUrl), '/upload.php')) {
             return preg_replace('#/upload\.php$#i', '/' . $script, $baseUrl);
         }
 
         return $baseUrl . '/' . ltrim($script, '/');
+    }
+
+    private function uploadToLocalStorage(UploadedFile $file, string $category): array
+    {
+        $disk = Storage::disk(config('transactions.documents_disk', 'public'));
+        $storedPath = $disk->putFileAs('transactions/documents', $file, $this->buildLocalStorageFilename($file));
+
+        if ($storedPath === false) {
+            throw new FilesApiException('Unable to store file locally.');
+        }
+
+        return [
+            'file_id' => $storedPath,
+            'file_name' => $storedPath,
+            'original_name' => $file->getClientOriginalName(),
+            'format' => strtolower($file->getClientOriginalExtension() ?: pathinfo($file->getClientOriginalName(), PATHINFO_EXTENSION)),
+            'category' => $category,
+            'raw' => ['success' => true, 'data' => [
+                'id' => $storedPath,
+                'file_name' => $storedPath,
+                'original_name' => $file->getClientOriginalName(),
+                'format' => strtolower($file->getClientOriginalExtension() ?: pathinfo($file->getClientOriginalName(), PATHINFO_EXTENSION)),
+                'category' => $category,
+            ]],
+        ];
+    }
+
+    private function buildLocalStorageFilename(UploadedFile $file): string
+    {
+        $extension = strtolower($file->getClientOriginalExtension() ?: pathinfo($file->getClientOriginalName(), PATHINFO_EXTENSION) ?: 'bin');
+        $baseName = preg_replace('/[^A-Za-z0-9_-]+/', '-', pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME) ?: 'document');
+        return sprintf('%s-%s.%s', $baseName ?: 'document', bin2hex(random_bytes(8)), $extension);
     }
 
     private function normalizeCategory(string $category): string
