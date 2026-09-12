@@ -18,18 +18,31 @@ class MedicineDisplay
         return is_numeric($text) ? (string) (float) $text : $text;
     }
 
-    public static function paginate($query, Request $request, int $perPage): LengthAwarePaginator
+    public static function paginate($query, Request $request, int $perPage, bool $usePublicIdentity = false): LengthAwarePaginator
     {
         $groups = $query->get()->groupBy(function ($row) {
-            return json_encode([
-                (int) $row->branch_id,
+            $identity = [
                 self::normalizeText($row->medicine_name),
                 self::normalizeText($row->generic_name),
-                (float) $row->price,
+                self::normalizeText($row->category),
                 self::normalizeText($row->type),
                 self::normalizeDosage($row->dosage),
                 self::normalizeText($row->unit),
-            ]);
+                (float) $row->price,
+            ];
+
+            if ($usePublicIdentity) {
+                array_unshift($identity,
+                    self::normalizeText($row->company_name),
+                    self::normalizeText($row->branch_name),
+                    self::normalizeText($row->branch_address),
+                    self::normalizeText($row->branch_contact),
+                );
+            } else {
+                array_unshift($identity, (int) $row->branch_id);
+            }
+
+            return json_encode($identity);
         })->map(function ($rows) {
             $item = $rows->first()->toArray();
             $item['members'] = $rows->map(fn ($row) => $row->toArray())->values()->all();
