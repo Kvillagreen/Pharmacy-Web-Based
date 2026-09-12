@@ -20,7 +20,7 @@ class MedicineDisplay
 
     public static function paginate($query, Request $request, int $perPage, bool $usePublicIdentity = false): LengthAwarePaginator
     {
-        $groups = $query->get()->groupBy(function ($row) {
+        $groups = $query->get()->groupBy(function ($row) use ($usePublicIdentity) {
             $identity = [
                 self::normalizeText($row->medicine_name),
                 self::normalizeText($row->generic_name),
