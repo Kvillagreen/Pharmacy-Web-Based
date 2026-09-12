@@ -197,7 +197,8 @@ class MedicineController extends Controller
         $query = Medicine::query()
             ->join('inventories', 'medicines.medicine_id', '=', 'inventories.medicine_id')
             ->leftJoin('batches', 'inventories.batch_id', '=', 'batches.batch_id')
-            ->leftJoin('branches', 'inventories.branch_id', '=', 'branches.branch_id')
+            ->leftJoin('branches', 'inventories.branch_id',
+                'branches.branch_name', '=', 'branches.branch_id')
             ->select([
                 'inventories.inventory_id',
                 'inventories.branch_id',
@@ -273,7 +274,9 @@ class MedicineController extends Controller
             ]);
         }
 
-        $paginated = $query->paginate($perPage);
+        $paginated = $request->boolean('group_display')
+            ? \App\Services\v1\MedicineDisplay::paginate($query, $request, $perPage)
+            : $query->paginate($perPage);
 
         $inventorySummary = Inventory::query()
             ->join('branches', 'branches.branch_id', '=', 'inventories.branch_id')

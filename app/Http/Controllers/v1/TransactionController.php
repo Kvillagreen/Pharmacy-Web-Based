@@ -187,7 +187,11 @@ class TransactionController extends Controller
             $statusQuery->whereNull('medicines.status')
                 ->orWhere('medicines.status', 'active');
         })
-        ->where('medicines.stocks', '>', 0)
+        ->where('inventories.stocks', '>', 0)
+        ->where(function ($statusQuery) {
+            $statusQuery->whereNull('batches.status')
+                ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
+        })
         ->where('batches.expiry_date', '>', now())
         ->orderBy('medicines.medicine_name')
         ->orderBy('batches.expiry_date', 'asc')
@@ -197,7 +201,9 @@ class TransactionController extends Controller
             $query = (new MedicineQuery())->apply($request, $query);
         }
 
-        $paginated = $query->paginate($perPage);
+        $paginated = $request->boolean('group_display')
+            ? \App\Services\v1\MedicineDisplay::paginate($query, $request, $perPage)
+            : $query->paginate($perPage);
 
         $inventorySummary = Inventory::query()
             ->join('branches', 'branches.branch_id', '=', 'inventories.branch_id')
