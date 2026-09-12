@@ -7,23 +7,35 @@ use Illuminate\Http\Request;
 
 class MedicineDisplay
 {
+    private static function normalizeText($value): string
+    {
+        return mb_strtolower(trim(preg_replace('/\s+/u', ' ', (string) $value)));
+    }
+
+    private static function normalizeDosage($value): string
+    {
+        $text = self::normalizeText($value);
+        return is_numeric($text) ? (string) (float) $text : $text;
+    }
+
     public static function paginate($query, Request $request, int $perPage): LengthAwarePaginator
     {
         $groups = $query->get()->groupBy(function ($row) {
             return json_encode([
                 (int) $row->branch_id,
-                trim((string) $row->medicine_name),
-                trim((string) $row->generic_name),
+                self::normalizeText($row->medicine_name),
+                self::normalizeText($row->generic_name),
                 (float) $row->price,
-                trim((string) $row->type),
-                trim((string) $row->dosage),
-                trim((string) $row->unit),
+                self::normalizeText($row->type),
+                self::normalizeDosage($row->dosage),
+                self::normalizeText($row->unit),
             ]);
         })->map(function ($rows) {
             $item = $rows->first()->toArray();
             $item['members'] = $rows->map(fn ($row) => $row->toArray())->values()->all();
             $item['stocks'] = (int) $rows->sum('stocks');
             $item['expiry_dates'] = $rows->pluck('expiry_date')->filter()->unique()->sort()->values()->all();
+            $item['expiry_date'] = $item['expiry_dates'][0] ?? null;
             $item['needs_protection'] = $rows->contains(fn ($row) => (bool) $row->needs_protection);
             $item['is_dangerous'] = $rows->contains(fn ($row) => (bool) $row->is_dangerous);
             return $item;

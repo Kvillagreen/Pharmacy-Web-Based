@@ -163,7 +163,7 @@ class MedicineController extends Controller
             $query->orderBy('medicines.medicine_name')->orderBy('branches.branch_name');
         }
 
-        $catalog = $query->paginate($perPage);
+        $catalog = \App\Services\v1\MedicineDisplay::paginate($query, $request, $perPage);
 
         return response()->json([
             'success' => true,

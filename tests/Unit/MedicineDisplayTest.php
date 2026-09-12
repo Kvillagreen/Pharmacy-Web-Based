@@ -14,7 +14,7 @@ class MedicineDisplayTest extends TestCase
         $base = ['branch_id' => 1, 'medicine_name' => 'Brand', 'generic_name' => 'Generic',
             'price' => '5.00', 'type' => 'Tablet', 'dosage' => '500', 'unit' => 'mg',
             'stocks' => 3, 'expiry_date' => '2030-01-01', 'needs_protection' => false, 'is_dangerous' => false];
-        $rows = collect([$base, [...$base, 'medicine_id' => 2, 'stocks' => 7, 'needs_protection' => true]]);
+        $rows = collect([$base, [...$base, 'medicine_id' => 2, 'stocks' => 7, 'needs_protection' => true, 'medicine_name' => ' BRAND ', 'generic_name' => "Generic\u{00A0}", 'type' => 'TABLET', 'unit' => 'MG', 'dosage' => '500.00', 'price' => 5]]);
         foreach (['branch_id' => 2, 'medicine_name' => 'Other', 'generic_name' => 'Other',
             'price' => 6, 'type' => 'Capsule', 'dosage' => '250', 'unit' => 'ml'] as $key => $value) {
             $rows->push([...$base, $key => $value]);
