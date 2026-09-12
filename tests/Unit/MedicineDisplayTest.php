@@ -31,4 +31,52 @@ class MedicineDisplayTest extends TestCase
         $this->assertTrue($page->items()[0]['needs_protection']);
         $this->assertCount(1, $page->items()[0]['expiry_dates']);
     }
+
+    public function test_public_identity_combines_same_medicine_data_across_internal_ids(): void
+    {
+        $base = [
+            'branch_id' => 1,
+            'company_name' => 'Sto. Rosario Drug Store',
+            'branch_name' => 'Sto. Rosario Main Branch',
+            'branch_address' => 'Sto. Rosario, Mandaue City, Cebu',
+            'branch_contact' => '09171194119',
+            'medicine_id' => 42,
+            'medicine_name' => 'Azithromycin',
+            'generic_name' => 'Azithromycin',
+            'category' => 'Antibiotic',
+            'type' => 'Tablet',
+            'dosage' => '500',
+            'unit' => 'mg',
+            'price' => '42.00',
+            'stocks' => 4,
+            'expiry_date' => '2030-01-01',
+            'needs_protection' => false,
+            'is_dangerous' => false,
+        ];
+        $rows = collect([
+            (new Inventory)->forceFill($base),
+            (new Inventory)->forceFill([
+                ...$base,
+                'medicine_id' => 99,
+                'medicine_name' => ' AZITHROMYCIN ',
+                'generic_name' => "Azithromycin\u{00A0}",
+                'dosage' => '500.00',
+                'price' => 42,
+                'stocks' => 6,
+                'expiry_date' => '2031-01-01',
+            ]),
+            (new Inventory)->forceFill([...$base, 'type' => 'Capsule', 'stocks' => 2]),
+        ]);
+        $query = new class($rows) {
+            public function __construct(private $rows) {}
+            public function get() { return $this->rows; }
+        };
+
+        $page = MedicineDisplay::paginate($query, Request::create('/'), 10, true);
+
+        $this->assertSame(2, $page->total());
+        $this->assertSame(10, $page->items()[0]['stocks']);
+        $this->assertCount(2, $page->items()[0]['members']);
+        $this->assertCount(2, $page->items()[0]['expiry_dates']);
+    }
 }

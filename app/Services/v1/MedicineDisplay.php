@@ -15,7 +15,13 @@ class MedicineDisplay
     private static function normalizeDosage($value): string
     {
         $text = self::normalizeText($value);
-        return is_numeric($text) ? (string) (float) $text : $text;
+        return $text === '' ? '' : (is_numeric($text) ? (string) (float) $text : $text);
+    }
+
+    private static function normalizeNumber($value): string
+    {
+        $text = self::normalizeText($value);
+        return $text === '' ? '' : (is_numeric($text) ? (string) (float) $text : $text);
     }
 
     public static function paginate($query, Request $request, int $perPage, bool $usePublicIdentity = false): LengthAwarePaginator
@@ -28,7 +34,7 @@ class MedicineDisplay
                 self::normalizeText($row->type),
                 self::normalizeDosage($row->dosage),
                 self::normalizeText($row->unit),
-                (float) $row->price,
+                self::normalizeNumber($row->price),
             ];
 
             if ($usePublicIdentity) {
