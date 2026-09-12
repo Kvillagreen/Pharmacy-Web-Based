@@ -24,7 +24,14 @@ class MedicineDisplay
         return $text === '' ? '' : (is_numeric($text) ? (string) (float) $text : $text);
     }
 
-    public static function paginate($query, Request $request, int $perPage, bool $usePublicIdentity = false): LengthAwarePaginator
+    public static function paginate(
+        $query,
+        Request $request,
+        int $perPage,
+        bool $usePublicIdentity = false,
+        ?callable $groupFilter = null,
+        ?callable $groupSort = null
+    ): LengthAwarePaginator
     {
         $groups = $query->get()->groupBy(function ($row) use ($usePublicIdentity) {
             $identity = [
@@ -59,6 +66,14 @@ class MedicineDisplay
             $item['is_dangerous'] = $rows->contains(fn ($row) => (bool) $row->is_dangerous);
             return $item;
         })->values();
+
+        if ($groupFilter) {
+            $groups = $groups->filter($groupFilter)->values();
+        }
+
+        if ($groupSort) {
+            $groups = $groupSort($groups)->values();
+        }
 
         $page = max(1, (int) $request->input('page', 1));
         $perPage = max(1, min($perPage, 500));

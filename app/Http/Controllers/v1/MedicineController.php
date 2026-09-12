@@ -144,26 +144,31 @@ class MedicineController extends Controller
             });
         }
 
-        if ($stockFilter === 'in-stock') {
-            $query->where('inventories.stocks', '>', 0);
-        } elseif ($stockFilter === 'low-stock') {
-            $query->whereColumn('inventories.stocks', '<=', 'medicines.reorder_level')
-                ->where('inventories.stocks', '>', 0);
-        } elseif ($stockFilter === 'out-of-stock') {
-            $query->where('inventories.stocks', '<=', 0);
-        }
+        $catalog = \App\Services\v1\MedicineDisplay::paginate(
+            $query,
+            $request,
+            $perPage,
+            true,
+            function (array $item) use ($stockFilter): bool {
+                $stocks = (int) ($item['stocks'] ?? 0);
+                $reorderLevel = (int) ($item['reorder_level'] ?? 0);
 
-        if ($sort === 'stocks') {
-            $query->orderByDesc('inventories.stocks')->orderBy('medicines.medicine_name');
-        } elseif ($sort === 'price') {
-            $query->orderBy('medicines.price')->orderBy('medicines.medicine_name');
-        } elseif ($sort === 'branch') {
-            $query->orderBy('branches.branch_name')->orderBy('medicines.medicine_name');
-        } else {
-            $query->orderBy('medicines.medicine_name')->orderBy('branches.branch_name');
-        }
-
-        $catalog = \App\Services\v1\MedicineDisplay::paginate($query, $request, $perPage, true);
+                return match ($stockFilter) {
+                    'in-stock' => $stocks > 0,
+                    'low-stock' => $stocks > 0 && $stocks <= $reorderLevel,
+                    'out-of-stock' => $stocks <= 0,
+                    default => true,
+                };
+            },
+            function ($groups) use ($sort) {
+                return match ($sort) {
+                    'stocks' => $groups->sortByDesc(fn (array $item) => (int) ($item['stocks'] ?? 0)),
+                    'price' => $groups->sortBy(fn (array $item) => (float) ($item['price'] ?? 0)),
+                    'branch' => $groups->sortBy(fn (array $item) => strtolower((string) ($item['branch_name'] ?? ''))),
+                    default => $groups->sortBy(fn (array $item) => strtolower((string) ($item['medicine_name'] ?? ''))),
+                };
+            }
+        );
 
         return response()->json([
             'success' => true,
