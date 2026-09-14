@@ -534,6 +534,7 @@ class TransactionController extends Controller
                 ->firstOrFail();
 
             if (($transaction->status ?? 'completed') === 'voided') {
+                DB::rollBack();
                 return response()->json([
                     'success' => false,
                     'message' => 'Transaction is already voided.',
@@ -541,6 +542,21 @@ class TransactionController extends Controller
             }
 
             $medicineIds = collect();
+
+            $user = $request->user();
+            $sameCompany = $user?->branch?->company_id &&
+                (int) $user->branch->company_id === (int) $transaction->branch?->company_id;
+            if (!$user || (!$sameCompany && $user->role !== 'super_admin') ||
+                (!in_array($user->role, ['admin', 'owner', 'super_admin'], true) &&
+                    (int) $user->branch_id !== (int) $transaction->branch_id)) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'You cannot void transactions outside your assigned scope.'], 403);
+            }
+
+            if ($transaction->items->isEmpty()) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'No transaction items are available to restore.'], 422);
+            }
 
             foreach ($transaction->items as $item) {
                 $inventory = Inventory::query()
@@ -550,10 +566,12 @@ class TransactionController extends Controller
                     ->lockForUpdate()
                     ->first();
 
-                if ($inventory) {
-                    $inventory->increment('stocks', (int) $item->quantity);
-                    $medicineIds->push((int) $item->medicine_id);
+                if (!$item->batch_id || !$inventory || (int) $item->quantity <= 0) {
+                    DB::rollBack();
+                    return response()->json(['success' => false, 'message' => 'The original batch inventory could not be restored. No stock changes were saved.'], 422);
                 }
+                $inventory->increment('stocks', (int) $item->quantity);
+                $medicineIds->push((int) $item->medicine_id);
             }
 
             $transaction->update([

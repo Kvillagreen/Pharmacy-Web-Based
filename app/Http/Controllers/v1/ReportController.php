@@ -117,6 +117,8 @@ class ReportController extends Controller
         }
 
         $allTransactions = Transaction::query()
+
+            ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
             ->whereIn('branch_id', $scopeBranchIds);
 
         $transactionSummary = (clone $allTransactions)
@@ -234,6 +236,7 @@ class ReportController extends Controller
 
         $categoryMix = DB::table('transaction_items')
             ->join('transactions', 'transaction_items.transaction_id', '=', 'transactions.transaction_id')
+            ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
             ->join('medicines', 'transaction_items.medicine_id', '=', 'medicines.medicine_id')
             ->selectRaw('medicines.category, SUM(transaction_items.quantity) as quantity_sold, COUNT(DISTINCT transactions.transaction_id) as transaction_count')
             ->whereIn('transactions.branch_id', $scopeBranchIds)
@@ -252,6 +255,7 @@ class ReportController extends Controller
         $branchPerformance = Branch::query()
             ->leftJoin('transactions', function ($join) use ($rangeStart, $rangeEnd) {
                 $join->on('branches.branch_id', '=', 'transactions.branch_id')
+                    ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
                     ->whereBetween('transactions.created_at', [$rangeStart, $rangeEnd]);
             })
             ->where('branches.status', 'active')
@@ -279,6 +283,7 @@ class ReportController extends Controller
 
         $topMedicines = DB::table('transaction_items')
             ->join('transactions', 'transaction_items.transaction_id', '=', 'transactions.transaction_id')
+            ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
             ->join('medicines', 'transaction_items.medicine_id', '=', 'medicines.medicine_id')
             ->selectRaw('
                 medicines.medicine_id,
@@ -393,6 +398,7 @@ class ReportController extends Controller
             ->get()
             ->map(fn ($transaction) => [
                 'transaction_id' => $transaction->transaction_id,
+                'status' => $transaction->status ?? 'completed',
                 'branch_name' => $transaction->branch?->branch_name,
                 'cashier_name' => trim(($transaction->user?->first_name ?? '') . ' ' . ($transaction->user?->last_name ?? '')),
                 'payment_method' => $transaction->payment_method,
@@ -554,6 +560,8 @@ class ReportController extends Controller
         $yearEnd = Carbon::create($selectedYear, 12, 31)->endOfDay();
 
         $transactionSummary = Transaction::query()
+
+            ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
             ->where('branch_id', $branch->branch_id)
             ->whereBetween('created_at', [$yearStart, $yearEnd])
             ->selectRaw('
@@ -690,6 +698,7 @@ class ReportController extends Controller
     {
         return [
             'transaction_id' => $transaction->transaction_id,
+            'status' => $transaction->status ?? 'completed',
             'regulated_classification' => $transaction->regulated_classification,
             'branch_name' => $transaction->branch?->branch_name,
             'cashier_name' => trim(($transaction->user?->first_name ?? '') . ' ' . ($transaction->user?->last_name ?? '')),

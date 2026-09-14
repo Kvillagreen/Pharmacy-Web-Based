@@ -202,8 +202,7 @@ class MedicineController extends Controller
         $query = Medicine::query()
             ->join('inventories', 'medicines.medicine_id', '=', 'inventories.medicine_id')
             ->leftJoin('batches', 'inventories.batch_id', '=', 'batches.batch_id')
-            ->leftJoin('branches', 'inventories.branch_id',
-                'branches.branch_name', '=', 'branches.branch_id')
+            ->leftJoin('branches', 'inventories.branch_id', '=', 'branches.branch_id')
             ->select([
                 'inventories.inventory_id',
                 'inventories.branch_id',
