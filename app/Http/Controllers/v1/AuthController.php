@@ -178,7 +178,9 @@ class AuthController extends Controller
               'email' => $user->email,
               'branch_id' => $user->branch_id,
               'branch_name' => $user->branch?->branch_name,
-              'theme_key' => $user->branch?->theme_key ?? 'emerald',
+              'branch_address' => $user->branch?->branch_address,
+            'branch_contact' => $user->branch?->branch_contact,
+            'theme_key' => $user->branch?->theme_key ?? 'emerald',
               'role' => $user->role,
               'address' => $user->address,
               'status' => $user->status,
@@ -191,11 +193,7 @@ class AuthController extends Controller
             'login_at' => $user->login_at,
         ];
 
-        $sessionUserPayload = array_merge([
-            'data' => $responseUser,
-        ], $responseUser);
-
-        return $this->response(true, 'Login successful', $sessionUserPayload, [
+        return $this->response(true, 'Login successful', $responseUser, [
             'token' => $token->plainTextToken,
             'expires_at' => $token->accessToken->expires_at ?? Carbon::now()->addHours(8),
         ]);
@@ -299,33 +297,15 @@ class AuthController extends Controller
             'last_seen_ip' => $request->ip(),
         ]);
 
-        $sessionUserPayload = array_merge([
-            'data' => [
-                'user_id' => $user->user_id,
-                'first_name' => $user->first_name,
-                'last_name' => $user->last_name,
-                'email' => $user->email,
-                'branch_id' => $user->branch_id,
-                'branch_name' => $user->branch?->branch_name ?? $companyData?->branch_name,
-                'theme_key' => $user->branch?->theme_key ?? 'emerald',
-                'role' => $user->role,
-                'address' => $user->address,
-                'status' => $user->status,
-                'company_id' => $companyData?->company_id,
-                'company_name' => $companyData?->company_name,
-                'company_email' => $companyData?->company_email,
-                'tin_number' => $companyData?->tin_number,
-                'permissions' => $permissionNames,
-                'created_at' => $user->created_at,
-                'login_at' => $user->login_at,
-            ],
-        ], [
+        $sessionUserPayload = [
             'user_id' => $user->user_id,
             'first_name' => $user->first_name,
             'last_name' => $user->last_name,
             'email' => $user->email,
             'branch_id' => $user->branch_id,
             'branch_name' => $user->branch?->branch_name ?? $companyData?->branch_name,
+            'branch_address' => $user->branch?->branch_address,
+            'branch_contact' => $user->branch?->branch_contact,
             'theme_key' => $user->branch?->theme_key ?? 'emerald',
             'role' => $user->role,
             'address' => $user->address,
@@ -337,7 +317,7 @@ class AuthController extends Controller
             'permissions' => $permissionNames,
             'created_at' => $user->created_at,
             'login_at' => $user->login_at,
-        ]);
+        ];
 
         return $this->response(true, 'Authenticated', $sessionUserPayload, [
             'authenticated' => true,
@@ -548,7 +528,9 @@ class AuthController extends Controller
                   'address' => $user->address,
                   'branch_id' => $user->branch_id,
                   'branch_name' => $user->branch?->branch_name ?? $companyData?->branch_name,
-                  'theme_key' => $user->branch?->theme_key ?? 'emerald',
+                  'branch_address' => $user->branch?->branch_address,
+            'branch_contact' => $user->branch?->branch_contact,
+            'theme_key' => $user->branch?->theme_key ?? 'emerald',
                   'company_id' => $companyData?->company_id,
                   'company_name' => $companyData?->company_name,
                   'company_email' => $companyData?->company_email,

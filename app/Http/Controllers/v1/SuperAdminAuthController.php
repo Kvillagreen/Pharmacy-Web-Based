@@ -72,11 +72,7 @@ class SuperAdminAuthController extends Controller
             'created_at' => $admin->created_at,
         ];
 
-        $sessionPayload = array_merge([
-            'data' => $payload,
-        ], $payload);
-
-        return $this->response(true, 'Login successful', $sessionPayload, [
+        return $this->response(true, 'Login successful', $payload, [
             'token' => $token->plainTextToken,
             'expires_at' => $token->accessToken->expires_at ?? Carbon::now()->addHours(8),
         ]);
@@ -120,11 +116,7 @@ class SuperAdminAuthController extends Controller
             'created_at' => $admin->created_at,
         ];
 
-        $sessionPayload = array_merge([
-            'data' => $payload,
-        ], $payload);
-
-        return $this->response(true, 'Authenticated', $sessionPayload, [
+        return $this->response(true, 'Authenticated', $payload, [
             'authenticated' => true,
         ]);
     }
