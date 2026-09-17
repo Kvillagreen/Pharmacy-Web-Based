@@ -222,14 +222,9 @@ class ReportController extends Controller
         }
 
         $allTransactions = Transaction::query()
-<<<<<<< HEAD
 
             ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
             ->whereIn('branch_id', $scopeBranchIds);
-=======
-            ->whereIn('branch_id', $scopeBranchIds)
-            ->where('status', '!=', 'voided');
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
 
         $transactionSummary = (clone $allTransactions)
             ->whereIn('branch_id', $scopeBranchIds)
@@ -376,11 +371,7 @@ class ReportController extends Controller
         $branchPerformance = Branch::query()
             ->leftJoin('transactions', function ($join) use ($rangeStart, $rangeEnd) {
                 $join->on('branches.branch_id', '=', 'transactions.branch_id')
-<<<<<<< HEAD
                     ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
-=======
-                    ->where('transactions.status', '!=', 'voided')
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
                     ->whereBetween('transactions.created_at', [$rangeStart, $rangeEnd]);
             })
             ->where('branches.status', 'active')
@@ -516,11 +507,7 @@ class ReportController extends Controller
         ])->values();
 
         $recentTransactions = Transaction::query()
-<<<<<<< HEAD
             ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name', 'attachments'])
-=======
-            ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name', 'items:transaction_item_id,transaction_id,batch_number,batch_id'])
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
             ->whereIn('branch_id', $scopeBranchIds)
             ->where('status', '!=', 'voided')
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
@@ -675,11 +662,7 @@ class ReportController extends Controller
         if ($selectedYear >= $currentYear) {
             return response()->json([
                 'success' => false,
-<<<<<<< HEAD
                 'message' => 'BIR 2306 summaries can only be generated for a completed taxable year.',
-=======
-                'message' => 'Branch Tax Payment Summary reports can only be generated for a completed taxable year.',
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
             ], 422);
         }
 
@@ -800,11 +783,7 @@ class ReportController extends Controller
                 'atc' => 'MC 200',
                 'atc_description' => 'Others',
                 'manner_of_payment' => 'Voluntary Payment',
-<<<<<<< HEAD
                 'type_of_payment' => 'Others - Income tax payment summary via BIR Form 2306',
-=======
-                'type_of_payment' => 'Branch Tax Payment Summary',
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
                 'line_of_business' => $lineOfBusiness,
                 'registered_address' => $registeredAddress,
                 'telephone_number' => $telephoneNumber,
@@ -943,11 +922,7 @@ class ReportController extends Controller
                     ['label' => 'Form 2306', 'source' => 'Explicit final-tax withholding records plus company and branch registration details; ordinary POS sales are excluded.'],
                 ],
                 'data_notes' => [
-<<<<<<< HEAD
                     'This output follows the BIR Form 2306 payment-form layout using the currently available sales and tax summary data in the system.',
-=======
-                    'This output provides a branch tax payment summary using the currently available sales and tax summary data in the system.',
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
                     'ATC, tax type code, due date, and payment classification should still be validated against the actual liability being paid before filing.',
                     'Basic tax payment is derived from the computed annual tax due in the current report, while surcharge, interest, and compromise are set to 0.00 unless manually assessed.',
                     'Please reconcile this branch tax payment summary with your accountant and official filing requirements before submission.',

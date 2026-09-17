@@ -13,12 +13,7 @@ use App\Models\v1\Transaction;
 use App\Models\v1\TransactionAttachment;
 use App\Models\v1\TransactionItem;
 use App\Models\v1\UserNotification;
-<<<<<<< HEAD
 use App\Services\v1\FilesApi;
-=======
-use App\Models\v1\SystemAuditLog;
-use App\Models\v1\User;
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
 use App\Services\v1\MedicineQuery;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
@@ -122,17 +117,8 @@ class TransactionController extends Controller
                 'used_amount' => (float) ($transaction->used_amount ?? 0),
                 'change' => (float) ($transaction->change ?? 0),
                 'status' => $transaction->status ?? 'completed',
-<<<<<<< HEAD
                 'voided_at' => $transaction->voided_at,
                 'void_reason' => $transaction->void_reason,
-=======
-                'void_reason' => $transaction->void_reason,
-                'void_supervisor_note' => $transaction->void_supervisor_note,
-                'voided_at' => $transaction->voided_at,
-                'voided_by_user_id' => $transaction->voided_by_user_id,
-                'void_authorized_by_user_id' => $transaction->void_authorized_by_user_id,
-                'batch_numbers' => $transaction->items->pluck('batch_number')->filter()->unique()->values()->all(),
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
                 'created_at' => $transaction->created_at,
             ];
         })->values();
@@ -205,7 +191,6 @@ class TransactionController extends Controller
             $query->where('branches.company_id', $companyId);
         }
 
-<<<<<<< HEAD
         $query->where('branches.status', 'active')
         ->where(function ($statusQuery) {
             $statusQuery->whereNull('medicines.status')
@@ -217,15 +202,6 @@ class TransactionController extends Controller
                 ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
         })
         ->where('batches.expiry_date', '>', now())
-=======
-        $query->whereNull('medicines.archived_at')
-        ->where('branches.status', 'active')
-        ->where('medicines.stocks', '>', 0)
-        ->where(function ($query) {
-            $query->whereNull('batches.expiry_date')
-                ->orWhereDate('batches.expiry_date', '>', now()->toDateString());
-        })
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
         ->orderBy('medicines.medicine_name')
         ->orderBy('batches.expiry_date', 'asc')
         ->orderBy('batches.received_date', 'asc')

@@ -18,18 +18,10 @@ class Inventory extends Model
         'medicine_id',
         'batch_id',
         'stocks',
-<<<<<<< HEAD
         'container_type',
         'container_name',
         'container_count',
         'pcs_per_container',
-=======
-        'cost_price',
-    ];
-
-    protected $casts = [
-        'cost_price' => 'decimal:2',
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
     ];
 
      public function medicine()
