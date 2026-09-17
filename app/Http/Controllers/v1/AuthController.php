@@ -27,10 +27,11 @@ class AuthController extends Controller
     private function rolePermissionNames(string $role): array
     {
         return match ($role) {
-            'staff' => ['dashboard', 'sales', 'sms', 'inventory', 'delivery'],
-            'pharmacist' => ['sales', 'sms', 'inventory', 'fefo', 'drugs', 'delivery'],
-            'branch_manager' => ['dashboard', 'inventory', 'fefo', 'delivery', 'reports'],
-            'owner', 'admin', 'super_admin' => ['dashboard', 'sales', 'sms', 'inventory', 'fefo', 'drugs', 'delivery', 'reports', 'users', 'settings', 'branches'],
+            'staff' => ['sales', 'sms', 'inventory', 'fefo', 'drugs', 'settings'],
+            'pharmacist' => ['sales', 'sms', 'inventory', 'fefo', 'drugs'],
+            'branch_manager' => ['dashboard', 'sales', 'inventory', 'fefo', 'reports'],
+            'owner', 'admin' => ['dashboard', 'sales', 'sms', 'inventory', 'fefo', 'drugs', 'reports', 'users', 'settings', 'branches'],
+            'super_admin' => ['dashboard', 'sms', 'inventory', 'fefo', 'drugs', 'reports', 'users', 'settings', 'branches'],
             default => ['dashboard'],
         };
     }
@@ -148,6 +149,9 @@ class AuthController extends Controller
             ->pluck('permission_name')
             ->values()
             ->toArray();
+
+        // Strip specific abilities from the token as required by security policy
+        $permissionNames = array_values(array_diff($permissionNames, ['sales', 'reports']));
 
         // Create token using permission names as Sanctum abilities
         $token = $user->createToken(
@@ -290,6 +294,10 @@ class AuthController extends Controller
             ->pluck('permission_name')
             ->values()
             ->toArray();
+
+        if ($user->role === 'super_admin') {
+            $permissionNames = array_values(array_diff($permissionNames, ['sales']));
+        }
 
         $this->safeUserUpdate($user, [
             'last_seen_ip' => $request->ip(),
@@ -508,6 +516,10 @@ class AuthController extends Controller
             ->pluck('permission_name')
             ->values()
             ->toArray();
+
+        if ($user->role === 'super_admin') {
+            $permissionNames = array_values(array_diff($permissionNames, ['sales']));
+        }
 
         $token = $request->user()?->currentAccessToken();
         $companyData = $this->companyDataForUser($user);

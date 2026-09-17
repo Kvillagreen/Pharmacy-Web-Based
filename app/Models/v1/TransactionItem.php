@@ -21,6 +21,12 @@ class TransactionItem extends Model
         'mfg_date',
         'quantity',
         'price',
+        'cost_price',
+    ];
+
+    protected $casts = [
+        'price' => 'decimal:2',
+        'cost_price' => 'decimal:2',
     ];
     public function medicine()
     {

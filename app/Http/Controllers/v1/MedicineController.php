@@ -13,6 +13,7 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class MedicineController extends Controller
 {
@@ -94,19 +95,20 @@ class MedicineController extends Controller
             ->join('branches', 'inventories.branch_id', '=', 'branches.branch_id')
             ->leftJoin('companies', 'branches.company_id', '=', 'companies.company_id')
             ->select([
-                'inventories.inventory_id',
-                'inventories.branch_id',
-                'companies.company_name',
-                'branches.branch_name',
-                'branches.branch_address',
-                'branches.branch_contact',
-                'medicines.medicine_id',
+                DB::raw('MAX(inventories.inventory_id) as inventory_id'),
+                DB::raw('MAX(inventories.branch_id) as branch_id'),
+                DB::raw('MAX(companies.company_name) as company_name'),
+                DB::raw('GROUP_CONCAT(DISTINCT branches.branch_name SEPARATOR ", ") as branch_name'),
+                DB::raw('MAX(branches.branch_address) as branch_address'),
+                DB::raw('MAX(branches.branch_contact) as branch_contact'),
+                DB::raw('MAX(medicines.medicine_id) as medicine_id'),
                 'medicines.medicine_name',
                 'medicines.generic_name',
-                'medicines.category',
+                DB::raw('MAX(medicines.category) as category'),
                 'medicines.type',
                 'medicines.dosage',
                 'medicines.unit',
+<<<<<<< HEAD
                 'medicines.price',
                 'medicines.reorder_level',
                 'medicines.is_dangerous',
@@ -118,7 +120,23 @@ class MedicineController extends Controller
                 'inventories.pcs_per_container',
                 'batches.expiry_date',
                 'batches.received_date',
+=======
+                DB::raw('MAX(medicines.units_per_box) as units_per_box'),
+                DB::raw('MAX(medicines.price) as price'),
+                DB::raw('MAX(medicines.reorder_level) as reorder_level'),
+                DB::raw('MAX(medicines.is_dangerous) as is_dangerous'),
+                DB::raw('MAX(medicines.needs_protection) as needs_protection'),
+                DB::raw('SUM(inventories.stocks) as stocks'),
+>>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
             ])
+            ->groupBy([
+                'medicines.medicine_name',
+                'medicines.generic_name',
+                'medicines.type',
+                'medicines.dosage',
+                'medicines.unit',
+            ])
+            ->whereNull('medicines.archived_at')
             ->where('branches.status', 'active')
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('medicines.status')
@@ -144,6 +162,7 @@ class MedicineController extends Controller
             });
         }
 
+<<<<<<< HEAD
         $catalog = \App\Services\v1\MedicineDisplay::paginate(
             $query,
             $request,
@@ -169,6 +188,28 @@ class MedicineController extends Controller
                 };
             }
         );
+=======
+        if ($stockFilter === 'in-stock') {
+            $query->havingRaw('SUM(inventories.stocks) > 0');
+        } elseif ($stockFilter === 'low-stock') {
+            $query->havingRaw('SUM(inventories.stocks) <= medicines.reorder_level')
+                ->havingRaw('SUM(inventories.stocks) > 0');
+        } elseif ($stockFilter === 'out-of-stock') {
+            $query->havingRaw('SUM(inventories.stocks) <= 0');
+        }
+
+        if ($sort === 'stocks') {
+            $query->orderByDesc(DB::raw('SUM(inventories.stocks)'))->orderBy('medicines.medicine_name');
+        } elseif ($sort === 'price') {
+            $query->orderBy('medicines.price')->orderBy('medicines.medicine_name');
+        } elseif ($sort === 'branch') {
+            $query->orderByRaw('MIN(branches.branch_name)')->orderBy('medicines.medicine_name');
+        } else {
+            $query->orderBy('medicines.medicine_name');
+        }
+
+        $catalog = $query->paginate($perPage);
+>>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
 
         return response()->json([
             'success' => true,
@@ -211,6 +252,9 @@ class MedicineController extends Controller
                 'medicines.medicine_name',
                 'medicines.generic_name',
                 'medicines.category',
+                'medicines.pricing_type',
+                'inventories.cost_price',
+                'medicines.markup_percent',
                 'medicines.price',
                 'medicines.reorder_level',
                 'inventories.stocks',
@@ -220,6 +264,9 @@ class MedicineController extends Controller
                 'inventories.pcs_per_container',
                 'medicines.dosage',
                 'medicines.unit',
+                'medicines.units_per_box',
+                DB::raw('FLOOR(inventories.stocks / GREATEST(medicines.units_per_box, 1)) as box_count'),
+                DB::raw('MOD(inventories.stocks, GREATEST(medicines.units_per_box, 1)) as loose_units'),
                 'medicines.type',
                 'medicines.is_dangerous',
                 'medicines.needs_protection',
@@ -233,12 +280,21 @@ class MedicineController extends Controller
                 'inventories.created_at',
                 'inventories.updated_at',
             ])
+<<<<<<< HEAD
          ->where('branches.status', 'active')
         ->where(function ($statusQuery) {
             $statusQuery->whereNull('medicines.status')
                 ->orWhere('medicines.status', 'active');
         })
         ->where('batches.expiry_date', '>', now())
+=======
+         ->whereNull('medicines.archived_at')
+        ->where('branches.status', 'active')
+        ->where(function ($query) {
+            $query->whereNull('batches.expiry_date')
+                ->orWhereDate('batches.expiry_date', '>', now()->toDateString());
+        })
+>>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
         ->where(function ($statusQuery) {
             $statusQuery->whereNull('batches.status')
                 ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
@@ -287,11 +343,18 @@ class MedicineController extends Controller
             ->join('medicines', 'medicines.medicine_id', '=', 'inventories.medicine_id')
             ->join('batches', 'batches.batch_id', '=', 'inventories.batch_id')
             ->where('branches.status', 'active')
+<<<<<<< HEAD
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('medicines.status')
                     ->orWhere('medicines.status', 'active');
             })
             ->whereDate('batches.expiry_date', '>', $today->toDateString())
+=======
+            ->where(function ($query) use ($today) {
+                $query->whereNull('batches.expiry_date')
+                    ->orWhereDate('batches.expiry_date', '>', $today->toDateString());
+            })
+>>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
                     ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
@@ -383,6 +446,7 @@ class MedicineController extends Controller
                 Cache::put($data['request_token'], true, 30);
             }
 
+<<<<<<< HEAD
             $stocks = $this->resolveStockCount($data);
 
             $matchingInventory = $this->findMatchingInventory($data);
@@ -414,29 +478,86 @@ class MedicineController extends Controller
                 'price' => $data['price'],
                 'reorder_level' => $data['reorder_level'],
                 'stocks' => $stocks,
+=======
+            $batchNumber = trim((string) ($data['batch_number'] ?? '')) ?: $this->generateBatchNumber();
+            $batch = Batch::where('batch_number', $batchNumber)->lockForUpdate()->first();
+
+            if ($batch && (
+                (string) $batch->expiry_date !== (string) $data['expiry_date']
+                || (string) $batch->mfg_date !== (string) $data['mfg_date']
+            )) {
+                throw new \RuntimeException('That batch number already exists with different manufacturing or expiry dates.', 422);
+            }
+
+            $medicine = Medicine::firstOrCreate([
+                'medicine_name' => trim($data['medicine_name']),
+                'generic_name' => trim($data['generic_name']),
+>>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
                 'dosage' => $data['dosage'],
                 'unit' => $data['unit'],
                 'type' => $data['type'],
+            ], [
+                'category' => $data['category'],
+                'pricing_type' => $data['pricing_type'],
+                'cost_price' => $data['cost_price'],
+                'markup_percent' => $data['markup_percent'],
+                'price' => $data['price'],
+                'reorder_level' => $data['reorder_level'],
+                'stocks' => 0,
+                'units_per_box' => $data['units_per_box'],
                 'is_dangerous' => (bool) $data['is_dangerous'],
                 'needs_protection' => (bool) $data['needs_protection'],
                 'status' => 'active',
             ]);
 
-            $batch = Batch::create([
-                'batch_number' => $data['batch_number'],
-                'expiry_date' => $data['expiry_date'],
-                'received_date' => $data['received_date'],
-                'mfg_date' => $data['mfg_date'],
-                'location' => $data['location'],
-                'status' => 'active',
+            $medicine->update([
+                'category' => $data['category'], 'pricing_type' => $data['pricing_type'],
+                'cost_price' => $data['cost_price'], 'markup_percent' => $data['markup_percent'],
+                'price' => $data['price'],
+                'reorder_level' => $data['reorder_level'], 'units_per_box' => $data['units_per_box'],
+                'is_dangerous' => (bool) $data['is_dangerous'],
+                'needs_protection' => (bool) $data['needs_protection'], 'archived_at' => null,
             ]);
 
-            $inventory = Inventory::create([
+            if (!$batch) {
+                $batch = Batch::create([
+                    'batch_number' => $batchNumber,
+                    'expiry_date' => $data['expiry_date'],
+                    'received_date' => $data['received_date'],
+                    'mfg_date' => $data['mfg_date'],
+                    'location' => $data['location'],
+                    'status' => 'active',
+                ]);
+            } elseif (Inventory::where('batch_id', $batch->batch_id)->where('medicine_id', '!=', $medicine->medicine_id)->exists()) {
+                throw new \RuntimeException('That batch number is already assigned to a different medicine.', 422);
+            }
+
+            $inventory = Inventory::query()->firstOrNew([
                 'branch_id' => $data['branch_id'],
                 'medicine_id' => $medicine->medicine_id,
                 'batch_id' => $batch->batch_id,
+<<<<<<< HEAD
                 'stocks' => $stocks,
                 ...$this->containerPayload($data),
+=======
+            ]);
+            $previousStock = (int) ($inventory->stocks ?? 0);
+            $previousCost = (float) ($inventory->cost_price ?? $data['cost_price']);
+            $incomingStock = (int) $data['stocks'];
+            $combinedStock = $previousStock + $incomingStock;
+            $inventory->cost_price = $combinedStock > 0
+                ? round((($previousStock * $previousCost) + ($incomingStock * (float) $data['cost_price'])) / $combinedStock, 2)
+                : (float) $data['cost_price'];
+            $inventory->stocks = $previousStock + (int) $data['stocks'];
+            $inventory->save();
+
+            BatchHistory::create([
+                'batch_id' => $batch->batch_id, 'medicine_id' => $medicine->medicine_id,
+                'inventory_id' => $inventory->inventory_id, 'branch_id' => $inventory->branch_id,
+                'user_id' => auth()->id(), 'action' => $previousStock > 0 ? 'stock_merged' : 'batch_created',
+                'quantity_change' => (int) $data['stocks'], 'stock_after' => (int) $inventory->stocks,
+                'notes' => $previousStock > 0 ? 'Matching medicine, batch number, manufacturing date, and expiry date merged.' : 'New inventory batch received.',
+>>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
             ]);
 
             $this->syncMedicineStocks($medicine->medicine_id);
@@ -450,7 +571,7 @@ class MedicineController extends Controller
                 'success' => true,
                 'message' => 'Medicine, batch, and inventory saved',
                 'data' => compact('medicine', 'batch', 'inventory'),
-            ]);
+            ], $previousStock > 0 ? 200 : 201);
         } catch (\Throwable $e) {
             DB::rollBack();
 
@@ -458,12 +579,20 @@ class MedicineController extends Controller
                 'success' => false,
                 'message' => 'Transaction failed',
                 'error' => $e->getMessage(),
-            ], 500);
+            ], $e->getCode() === 422 ? 422 : 500);
         }
     }
 
     public function show(string $id)
     {
+        $medicine = Medicine::findOrFail($id);
+        $batches = Inventory::query()
+            ->with(['batch.histories', 'branch:branch_id,branch_name'])
+            ->where('medicine_id', $id)
+            ->orderBy('batch_id')
+            ->get();
+
+        return response()->json(['success' => true, 'data' => ['medicine' => $medicine, 'batches' => $batches]]);
     }
 
     public function archived(Request $request)
@@ -551,10 +680,14 @@ class MedicineController extends Controller
                 'medicine_name' => $data['medicine_name'],
                 'generic_name' => $data['generic_name'],
                 'category' => $data['category'],
+                'pricing_type' => $data['pricing_type'],
+                'cost_price' => $data['cost_price'],
+                'markup_percent' => $data['markup_percent'],
                 'price' => $data['price'],
                 'reorder_level' => $data['reorder_level'],
                 'dosage' => $data['dosage'],
                 'unit' => $data['unit'],
+                'units_per_box' => $data['units_per_box'],
                 'type' => $data['type'],
                 'needs_protection' => filter_var($data['needs_protection'], FILTER_VALIDATE_BOOLEAN),
                 'is_dangerous' => filter_var($data['is_dangerous'], FILTER_VALIDATE_BOOLEAN),
@@ -567,11 +700,23 @@ class MedicineController extends Controller
                 ->firstOrFail();
 
             $inventory->update([
+<<<<<<< HEAD
                 'stocks' => $this->resolveStockCount($data),
                 ...$this->containerPayload($data),
+=======
+                'stocks' => $data['stocks'],
+                'cost_price' => $data['cost_price'],
+>>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
             ]);
 
             $batch = Batch::where('batch_id', $inventory->batch_id)->lockForUpdate()->firstOrFail();
+            $duplicateBatch = Batch::query()
+                ->where('batch_number', $data['batch_number'])
+                ->where('batch_id', '!=', $batch->batch_id)
+                ->first();
+            if ($duplicateBatch) {
+                throw new \RuntimeException('That batch number already exists.', 422);
+            }
             $batch->update([
                 'batch_number' => $data['batch_number'],
                 'expiry_date' => $data['expiry_date'],
@@ -587,6 +732,13 @@ class MedicineController extends Controller
 
             $this->syncMedicineStocks($medicine->medicine_id);
 
+            BatchHistory::create([
+                'batch_id' => $batch->batch_id, 'medicine_id' => $medicine->medicine_id,
+                'inventory_id' => $inventory->inventory_id, 'branch_id' => $inventory->branch_id,
+                'user_id' => auth()->id(), 'action' => 'batch_updated', 'quantity_change' => 0,
+                'stock_after' => (int) $inventory->stocks, 'notes' => 'Medicine or batch details updated.',
+            ]);
+
             DB::commit();
 
             return response()->json([
@@ -601,7 +753,7 @@ class MedicineController extends Controller
                 'success' => false,
                 'message' => 'Update failed',
                 'error' => $e->getMessage(),
-            ], 500);
+            ], $e->getCode() === 422 ? 422 : 500);
         }
     }
 
@@ -611,6 +763,7 @@ class MedicineController extends Controller
 
         try {
             $medicine = Medicine::where('medicine_id', $medicine_id)->firstOrFail();
+<<<<<<< HEAD
             $inventoryBatchIds = Inventory::where('medicine_id', $medicine_id)->pluck('batch_id');
 
             Inventory::where('medicine_id', $medicine_id)->update(['stocks' => 0]);
@@ -622,13 +775,29 @@ class MedicineController extends Controller
 
             foreach ($inventoryBatchIds as $batchId) {
                 $this->recordBatchHistory((int) $batchId, request(), 'archived', 'Medicine archived from inventory.');
+=======
+            $inventories = Inventory::where('medicine_id', $medicine_id)->get();
+            $medicine->update(['archived_at' => now()]);
+            Batch::whereIn('batch_id', $inventories->pluck('batch_id'))->update(['status' => 'archived']);
+            foreach ($inventories as $inventory) {
+                BatchHistory::create([
+                    'batch_id' => $inventory->batch_id, 'medicine_id' => $medicine->medicine_id,
+                    'inventory_id' => $inventory->inventory_id, 'branch_id' => $inventory->branch_id,
+                    'user_id' => auth()->id(), 'action' => 'archived', 'quantity_change' => 0,
+                    'stock_after' => (int) $inventory->stocks, 'notes' => 'Medicine archived; inventory retained for audit.',
+                ]);
+>>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
             }
 
             DB::commit();
 
             return response()->json([
                 'success' => true,
+<<<<<<< HEAD
                 'message' => 'Medicine archived successfully',
+=======
+                'message' => 'Medicine and linked batches archived successfully',
+>>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
             ], 200);
         } catch (\Throwable $e) {
             DB::rollBack();
@@ -652,6 +821,7 @@ class MedicineController extends Controller
             ->update(['stocks' => $totalStocks]);
     }
 
+<<<<<<< HEAD
     private function resolveStockCount(array $data): int
     {
         $containerType = strtolower(trim((string) ($data['container_type'] ?? 'none')));
@@ -719,6 +889,15 @@ class MedicineController extends Controller
             'notes' => $notes,
             'meta' => $meta ?: null,
         ]);
+=======
+    private function generateBatchNumber(): string
+    {
+        do {
+            $number = 'BAT-' . now()->format('Ymd') . '-' . Str::upper(Str::random(6));
+        } while (Batch::where('batch_number', $number)->exists());
+
+        return $number;
+>>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
     }
 
     private function normalizeCategoryValues($category)

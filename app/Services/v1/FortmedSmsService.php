@@ -330,7 +330,7 @@ class FortmedSmsService
             'normalized_to_number' => $message->normalized_to_number,
             'counterparty_number' => $this->formatDisplayPhoneNumber($message->counterparty_number),
             'message_body' => $message->message_body,
-            'received_at' => optional($message->provider_received_at)->toDateTimeString(),
+            'received_at' => $this->formatSmsTimestamp($message->provider_received_at),
         ])->values()->all();
     }
 
@@ -739,10 +739,19 @@ class FortmedSmsService
         }
 
         try {
-            return Carbon::parse((string) $value);
+            $timezone = config('app.timezone', 'Asia/Manila');
+            $timestamp = trim((string) $value);
+            $sourceTimezone = $this->timestampHasTimezone($timestamp) ? null : 'UTC';
+
+            return Carbon::parse($timestamp, $sourceTimezone)->timezone($timezone);
         } catch (\Throwable) {
             return null;
         }
+    }
+
+    private function timestampHasTimezone(string $value): bool
+    {
+        return preg_match('/(?:[zZ]|[+-]\d{2}:?\d{2})$/', trim($value)) === 1;
     }
 
     private function extractProviderMessageId(mixed $providerResponse): ?string
@@ -795,7 +804,7 @@ class FortmedSmsService
                 'normalized_to_number' => $message->normalized_to_number,
                 'message_body' => $message->message_body,
                 'sender_name' => $message->sender_name,
-                'received_at' => optional($message->provider_received_at)->toDateTimeString(),
+                'received_at' => $this->formatSmsTimestamp($message->provider_received_at),
             ])
             ->values()
             ->all();
@@ -810,8 +819,8 @@ class FortmedSmsService
             'template_tag' => $latest?->template_tag,
             'message_body' => $latest?->message_body ?? '',
             'sender_name' => $latest?->sender_name ?? '',
-            'received_at' => optional($latest?->provider_received_at)->toDateTimeString(),
-            'last_received_at' => optional($latest?->provider_received_at)->toDateTimeString(),
+            'received_at' => $this->formatSmsTimestamp($latest?->provider_received_at),
+            'last_received_at' => $this->formatSmsTimestamp($latest?->provider_received_at),
             'message_count' => $sorted->count(),
             'history' => $history,
             'raw' => $latest?->provider_payload ?? [],
@@ -823,6 +832,24 @@ class FortmedSmsService
         $templateTag = trim((string) ($value ?? ''));
 
         return $templateTag !== '' ? $templateTag : 'Custom Reply';
+    }
+
+    private function formatSmsTimestamp(mixed $value): ?string
+    {
+        if (!$value) {
+            return null;
+        }
+
+        try {
+            $timezone = config('app.timezone', 'Asia/Manila');
+            $timestamp = $value instanceof Carbon
+                ? $value->copy()
+                : Carbon::parse((string) $value, $timezone);
+
+            return $timestamp->timezone($timezone)->toIso8601String();
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     private function generateReferenceNumber(string $prefix = 'SMS'): string

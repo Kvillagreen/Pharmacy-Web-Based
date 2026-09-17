@@ -1,0 +1,110 @@
+<?php
+
+namespace App\Services\v1;
+
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+
+class DocumentStorageService
+{
+    /**
+     * Store a document in the local Laravel storage or the Hostinger Files API.
+     */
+    public function store(UploadedFile $file, string $directory, string $category = 'document'): string|null
+    {
+        if (app()->environment('production')) {
+            return $this->storeInHostingerFiles($file, $category);
+        }
+
+        $relativePath = $file->storeAs(
+            $directory,
+            $this->buildLocalFilename($file),
+            ['disk' => config('transactions.documents_disk', 'public')]
+        );
+
+        return $relativePath ?: null;
+    }
+
+    protected function storeInHostingerFiles(UploadedFile $file, string $category): string
+    {
+        $apiUrl = $this->normalizeHostingerApiUrl((string) config('transactions.hostinger_files_api_url', env('TRANSACTION_HOSTINGER_FILES_API_URL')));
+
+        if ($apiUrl === '') {
+            throw new \RuntimeException('Hostinger Files API is not configured. Set TRANSACTION_HOSTINGER_FILES_API_URL in the environment.');
+        }
+
+        $allowedCategories = ['document', 'prescription', 'dangerous_drug', 'valid_id'];
+        $normalizedCategory = in_array($category, $allowedCategories, true) ? $category : 'document';
+
+        $fileContents = file_get_contents($file->getRealPath());
+
+        if ($fileContents === false || $fileContents === '') {
+            $fileContents = $file->getContent();
+        }
+
+        $response = Http::asMultipart()->post($apiUrl, [
+            ['name' => 'category', 'contents' => $normalizedCategory],
+            [
+                'name' => 'file',
+                'contents' => $fileContents,
+                'filename' => $file->getClientOriginalName(),
+                'headers' => ['Content-Type' => $file->getMimeType() ?: 'application/octet-stream'],
+            ],
+        ]);
+
+        if ($response->failed()) {
+            $body = $response->body();
+            $status = $response->status();
+
+            throw new \RuntimeException(sprintf(
+                'Unable to upload document to Hostinger Files API. URL: %s | Status: %s | Response: %s',
+                $apiUrl,
+                $status,
+                is_string($body) ? substr($body, 0, 500) : json_encode($body)
+            ));
+        }
+
+        $payload = $response->json();
+
+        if (!is_array($payload)) {
+            throw new \RuntimeException('Invalid Hostinger Files API response.');
+        }
+
+        return $payload['url']
+            ?? $payload['download_url']
+            ?? $payload['path']
+            ?? $apiUrl . '/' . ($payload['uuid'] ?? Str::uuid()->toString());
+    }
+
+    protected function normalizeHostingerApiUrl(string $apiUrl): string
+    {
+        $apiUrl = trim($apiUrl);
+
+        if ($apiUrl === '') {
+            return '';
+        }
+
+        $apiUrl = rtrim($apiUrl, '/');
+        $path = parse_url($apiUrl, PHP_URL_PATH) ?: '';
+
+        if ($path === '' || $path === '/') {
+            return $apiUrl . '/files';
+        }
+
+        if (str_ends_with(strtolower($path), '/files')) {
+            return $apiUrl;
+        }
+
+        return $apiUrl . '/files';
+    }
+
+    protected function buildLocalFilename(UploadedFile $file): string
+    {
+        $extension = strtolower($file->getClientOriginalExtension());
+        $baseName = Str::slug(pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME) ?: 'document');
+
+        return sprintf('%s-%s.%s', $baseName, Str::uuid()->toString(), $extension !== '' ? $extension : 'bin');
+    }
+}
