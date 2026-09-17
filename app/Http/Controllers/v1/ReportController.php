@@ -87,6 +87,9 @@ class ReportController extends Controller
                         'transaction_count' => 0,
                         'average_sale' => 0,
                         'total_discount' => 0,
+                        'cost_of_goods_sold' => null,
+                        'gross_profit' => null,
+                        'gross_margin_pct' => null,
                         'inventory_value' => 0,
                         'low_stock_count' => 0,
                         'expiring_30_count' => 0,
@@ -329,7 +332,6 @@ class ReportController extends Controller
                 inventories.created_at
             ')
             ->whereIn('inventories.branch_id', $scopeBranchIds)
-            ->whereBetween('inventories.created_at', [$rangeStart, $rangeEnd])
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
                     ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
@@ -390,7 +392,7 @@ class ReportController extends Controller
         ])->values();
 
         $recentTransactions = Transaction::query()
-            ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name', 'attachments'])
+            ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name', 'attachments', 'items'])
             ->whereIn('branch_id', $scopeBranchIds)
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->latest('created_at')
@@ -404,6 +406,7 @@ class ReportController extends Controller
                 'payment_method' => $transaction->payment_method,
                 'reference_number' => $transaction->reference_number,
                 'transaction_type' => $transaction->transaction_type,
+                'batch_numbers' => $transaction->items->pluck('batch_number')->filter()->unique()->values(),
                 'regulated_classification' => $transaction->regulated_classification,
                 'patient_name' => $transaction->patient_name,
                 'total_amount' => (float) $transaction->total_amount,
@@ -413,7 +416,7 @@ class ReportController extends Controller
             ->values();
 
         $prescribedTransactions = Transaction::query()
-            ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name', 'attachments'])
+            ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name', 'attachments', 'items'])
             ->whereIn('branch_id', $scopeBranchIds)
             ->whereIn('regulated_classification', ['controlled', 'mixed'])
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
@@ -497,6 +500,10 @@ class ReportController extends Controller
                     'transaction_count' => $transactionCount,
                     'average_sale' => round($averageSale, 2),
                     'total_discount' => round($totalDiscount, 2),
+                    // Purchase costs are not recorded, so profit cannot be calculated.
+                    'cost_of_goods_sold' => null,
+                    'gross_profit' => null,
+                    'gross_margin_pct' => null,
                     'inventory_value' => round($inventoryValue, 2),
                     'low_stock_count' => $lowStockCount,
                     'expiring_30_count' => $expiring30Count,
