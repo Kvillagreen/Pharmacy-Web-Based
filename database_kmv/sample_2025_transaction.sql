@@ -393,14 +393,8 @@ INSERT INTO transaction_items (
 COMMIT;
 
 -- Created rows:
-<<<<<<< HEAD
 -- uses branch_1_id: @branch_1_id
 -- uses branch_2_id: @branch_2_id
-=======
--- company_id:      @company_id
--- branch_1_id:     @branch_1_id
--- branch_2_id:     @branch_2_id
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
 -- user_id:         @user_id
 -- owner_user_id:   @owner_user_id
 -- medicine_id:     @medicine_id

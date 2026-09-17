@@ -9,6 +9,9 @@
 
 .routes_kmv
 .resources_kmv
+.bootstrap_kmv
+.database_kmv
+.config_kmv
 /.fleet
 /.idea
 /.nova

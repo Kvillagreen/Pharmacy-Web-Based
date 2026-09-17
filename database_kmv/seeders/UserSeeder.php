@@ -14,8 +14,6 @@ use App\Models\v1\SuperAdmin;
 use App\Models\v1\Transaction;
 use App\Models\v1\TransactionItem;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Schema;
-use Illuminate\Database\Schema\Blueprint;
 
 class UserSeeder extends Seeder
 {
@@ -24,28 +22,6 @@ class UserSeeder extends Seeder
      */
     public function run(): void
     {
-        if (Schema::hasTable('batches') && !Schema::hasColumn('batches', 'batch_number')) {
-            Schema::table('batches', function (Blueprint $table) {
-                $table->string('batch_number')->nullable()->after('batch_id');
-            });
-        }
-
-        if (Schema::hasTable('inventories') && !Schema::hasColumn('inventories', 'stocks')) {
-            Schema::table('inventories', function (Blueprint $table) {
-                $table->integer('stocks')->default(0)->after('batch_id');
-            });
-        }
-
-        if (Schema::hasTable('transaction_items') && !Schema::hasColumn('transaction_items', 'batch_id')) {
-            Schema::table('transaction_items', function (Blueprint $table) {
-                $table->unsignedBigInteger('batch_id')->nullable()->after('medicine_id');
-                $table->string('batch_number')->nullable()->after('batch_id');
-                $table->date('expiry_date')->nullable()->after('batch_number');
-                $table->date('mfg_date')->nullable()->after('expiry_date');
-                $table->decimal('price', 10, 2)->nullable()->after('mfg_date');
-            });
-        }
-
         // -------------------------------------------------
         // 1. Seed permissions
         // -------------------------------------------------
@@ -82,7 +58,7 @@ class UserSeeder extends Seeder
         $company = Company::updateOrCreate(
             ['company_email' => 'testcompany@kmvpharmacy.com'],
             [
-                'company_name' => 'Sto. Rosario Drugstore',
+                'company_name' => 'Sto. Rosario Drug Store Test Company',
                 'tin_number' => '1234567890',
             ]
         );
@@ -214,7 +190,6 @@ class UserSeeder extends Seeder
                 $medicineData
             );
 
-<<<<<<< HEAD
             $batch = Batch::updateOrCreate(
                 ['batch_number' => sprintf('SEED26-%04d', $index + 1)],
                 [
@@ -229,50 +204,13 @@ class UserSeeder extends Seeder
             );
 
             foreach ([[$branch, $stocks], [$branch2, max(8, (int) floor($stocks * 0.75))]] as [$targetBranch, $branchStocks]) {
-=======
-            $batchNumber = sprintf('SEED26-%04d', $index + 1);
-            $batchData = [
-                'expiry_date' => now()->addMonths(18 + ($index % 10))->toDateString(),
-                'received_date' => now()->subDays(20 + ($index % 15))->toDateString(),
-                'mfg_date' => now()->subMonths(4 + ($index % 6))->toDateString(),
-                'location' => $isDangerous
-                    ? 'Controlled Cabinet C-' . (($index % 4) + 1)
-                    : ($needsProtection ? 'Cold Chain Ref-' . (($index % 3) + 1) : 'Aisle ' . (($index % 8) + 1) . ' Shelf ' . chr(65 + ($index % 6))),
-                'status' => 'active',
-            ];
-
-            if (Schema::hasColumn('batches', 'batch_number')) {
-                $batchData['batch_number'] = $batchNumber;
-            }
-
-            $batch = Batch::updateOrCreate(
-                Schema::hasColumn('batches', 'batch_number') ? ['batch_number' => $batchNumber] : ['batch_id' => $index + 1],
-                $batchData
-            );
-
-            foreach ([[$branch, $stocks], [$branch2, max(8, (int) floor($stocks * 0.75))]] as [$targetBranch, $branchStocks]) {
-                $inventoryData = [
-                    'branch_id' => $targetBranch->branch_id,
-                    'medicine_id' => $medicine->medicine_id,
-                    'batch_id' => $batch->batch_id,
-                ];
-
-                if (Schema::hasColumn('inventories', 'stocks')) {
-                    $inventoryData['stocks'] = $branchStocks;
-                }
-
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
                 Inventory::updateOrCreate(
                     [
                         'branch_id' => $targetBranch->branch_id,
                         'medicine_id' => $medicine->medicine_id,
                         'batch_id' => $batch->batch_id,
                     ],
-<<<<<<< HEAD
                     ['stocks' => $branchStocks]
-=======
-                    $inventoryData
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
                 );
             }
 
@@ -325,38 +263,10 @@ class UserSeeder extends Seeder
                 'updated_at' => $createdAt,
             ])->save();
 
-<<<<<<< HEAD
-=======
-            $transactionItemData = [
-                'quantity' => $quantity,
-            ];
-
-            if (Schema::hasColumn('transaction_items', 'batch_id')) {
-                $transactionItemData['batch_id'] = $seededMedicine['batch']->batch_id;
-            }
-
-            if (Schema::hasColumn('transaction_items', 'batch_number')) {
-                $transactionItemData['batch_number'] = $seededMedicine['batch']->batch_number ?? $batchNumber;
-            }
-
-            if (Schema::hasColumn('transaction_items', 'expiry_date')) {
-                $transactionItemData['expiry_date'] = $seededMedicine['batch']->expiry_date;
-            }
-
-            if (Schema::hasColumn('transaction_items', 'mfg_date')) {
-                $transactionItemData['mfg_date'] = $seededMedicine['batch']->mfg_date;
-            }
-
-            if (Schema::hasColumn('transaction_items', 'price')) {
-                $transactionItemData['price'] = $price;
-            }
-
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
             $transactionItem = TransactionItem::updateOrCreate(
                 [
                     'transaction_id' => $transaction->transaction_id,
                     'medicine_id' => $seededMedicine['medicine']->medicine_id,
-<<<<<<< HEAD
                     'batch_id' => $seededMedicine['batch']->batch_id,
                 ],
                 [
@@ -366,10 +276,6 @@ class UserSeeder extends Seeder
                     'quantity' => $quantity,
                     'price' => $price,
                 ]
-=======
-                ],
-                $transactionItemData
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
             );
             $transactionItem->timestamps = false;
             $transactionItem->forceFill([
