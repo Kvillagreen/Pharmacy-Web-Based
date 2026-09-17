@@ -32,11 +32,7 @@ class Medicine extends Model
         "is_dangerous",
         "is_yakap_eligible",
         "needs_protection",
-<<<<<<< HEAD
         "status",
-=======
-        "archived_at",
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
         ];
     protected $casts = [
         'archived_at' => 'datetime',

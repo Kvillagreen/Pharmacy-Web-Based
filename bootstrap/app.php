@@ -20,8 +20,6 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'prevent.concurrent' => \App\Http\Middleware\PreventConcurrentSubmission::class,
             'super_admin' => \App\Http\Middleware\EnsureSuperAdmin::class,
-            'abilities' => \Laravel\Sanctum\Http\Middleware\CheckAbilities::class,
-            'ability' => \Laravel\Sanctum\Http\Middleware\CheckForAnyAbility::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

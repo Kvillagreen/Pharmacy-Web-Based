@@ -14,8 +14,6 @@ use App\Models\v1\SuperAdmin;
 use App\Models\v1\Transaction;
 use App\Models\v1\TransactionItem;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Schema;
-use Illuminate\Database\Schema\Blueprint;
 
 class UserSeeder extends Seeder
 {
@@ -24,28 +22,6 @@ class UserSeeder extends Seeder
      */
     public function run(): void
     {
-        if (Schema::hasTable('batches') && !Schema::hasColumn('batches', 'batch_number')) {
-            Schema::table('batches', function (Blueprint $table) {
-                $table->string('batch_number')->nullable()->after('batch_id');
-            });
-        }
-
-        if (Schema::hasTable('inventories') && !Schema::hasColumn('inventories', 'stocks')) {
-            Schema::table('inventories', function (Blueprint $table) {
-                $table->integer('stocks')->default(0)->after('batch_id');
-            });
-        }
-
-        if (Schema::hasTable('transaction_items') && !Schema::hasColumn('transaction_items', 'batch_id')) {
-            Schema::table('transaction_items', function (Blueprint $table) {
-                $table->unsignedBigInteger('batch_id')->nullable()->after('medicine_id');
-                $table->string('batch_number')->nullable()->after('batch_id');
-                $table->date('expiry_date')->nullable()->after('batch_number');
-                $table->date('mfg_date')->nullable()->after('expiry_date');
-                $table->decimal('price', 10, 2)->nullable()->after('mfg_date');
-            });
-        }
-
         // -------------------------------------------------
         // 1. Seed permissions
         // -------------------------------------------------
@@ -82,7 +58,7 @@ class UserSeeder extends Seeder
         $company = Company::updateOrCreate(
             ['company_email' => 'testcompany@kmvpharmacy.com'],
             [
-                'company_name' => 'Sto. Rosario Drugstore',
+                'company_name' => 'Sto. Rosario Drug Store Test Company',
                 'tin_number' => '1234567890',
             ]
         );
