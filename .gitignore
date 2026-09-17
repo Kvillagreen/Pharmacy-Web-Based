@@ -6,6 +6,9 @@
 .phpactor.json
 .phpunit.result.cache
 .app_kmv
+
+.routes_kmv
+.resources_kmv
 /.fleet
 /.idea
 /.nova

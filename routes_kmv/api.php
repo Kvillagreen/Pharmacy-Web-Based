@@ -29,7 +29,6 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
     Route::post('/branch-public', [BranchController::class,'branch']);
     Route::get('/catalog', [MedicineController::class, 'publicCatalog']);
     Route::post('/admin/login', [SuperAdminAuthController::class, 'login']);
-    Route::post('/sms/receiver', [SmsController::class, 'receiver']);
 
     // Protected routes
     Route::middleware('auth:sanctum')->group(function () {
@@ -37,12 +36,10 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
         Route::put('/header/notifications/{id}/read', [AuthController::class, 'markNotificationRead']);
         Route::get('/dashboard', [DashboardController::class, 'index']);
         Route::get('/controlled-drugs', [ControlledDrugController::class, 'index']);
-        Route::get('/reports', [ReportController::class, 'index'])->middleware('ability:reports');
-        Route::get('/reports/bir-annual', [ReportController::class, 'birAnnualDeclaration'])->middleware('ability:reports');
-        Route::post('/reports/bir-2306', [ReportController::class, 'storeBir2306'])->middleware('ability:reports');
-        Route::get('/reports/transactions', [TransactionController::class, 'records'])->middleware('ability:reports');
+        Route::get('/reports', [ReportController::class, 'index']);
+        Route::get('/reports/bir-annual', [ReportController::class, 'birAnnualDeclaration']);
+        Route::get('/reports/transactions', [TransactionController::class, 'records']);
         Route::get('/sms/replies', [SmsController::class, 'replies']);
-        Route::get('/sms/orders', [SmsController::class, 'orders']);
         Route::get('/sms/diagnostics', [SmsController::class, 'diagnostics']);
         Route::get('/sms/logs', [SmsController::class, 'logs']);
         Route::get('/user/permissions/options', [UserController::class, 'permissionOptions']);
