@@ -59,7 +59,7 @@ class SuperAdminAuthController extends Controller
             'last_seen_ip' => $request->ip(),
         ]);
 
-        return $this->response(true, 'Login successful', [
+        $payload = [
             'super_admin_id' => $admin->super_admin_id,
             'first_name' => $admin->first_name,
             'last_name' => $admin->last_name,
@@ -70,7 +70,13 @@ class SuperAdminAuthController extends Controller
             'last_login_ip' => $admin->last_login_ip,
             'registered_ip' => $admin->registered_ip,
             'created_at' => $admin->created_at,
-        ], [
+        ];
+
+        $sessionPayload = array_merge([
+            'data' => $payload,
+        ], $payload);
+
+        return $this->response(true, 'Login successful', $sessionPayload, [
             'token' => $token->plainTextToken,
             'expires_at' => $token->accessToken->expires_at ?? Carbon::now()->addHours(8),
         ]);
@@ -101,7 +107,7 @@ class SuperAdminAuthController extends Controller
             'last_seen_ip' => $request->ip(),
         ]);
 
-        return $this->response(true, 'Authenticated', [
+        $payload = [
             'super_admin_id' => $admin->super_admin_id,
             'first_name' => $admin->first_name,
             'last_name' => $admin->last_name,
@@ -112,7 +118,13 @@ class SuperAdminAuthController extends Controller
             'last_login_ip' => $admin->last_login_ip,
             'registered_ip' => $admin->registered_ip,
             'created_at' => $admin->created_at,
-        ], [
+        ];
+
+        $sessionPayload = array_merge([
+            'data' => $payload,
+        ], $payload);
+
+        return $this->response(true, 'Authenticated', $sessionPayload, [
             'authenticated' => true,
         ]);
     }
