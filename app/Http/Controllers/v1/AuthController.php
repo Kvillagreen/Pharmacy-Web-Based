@@ -301,6 +301,8 @@ class AuthController extends Controller
             'last_name' => $user->last_name,
             'email' => $user->email,
             'branch_id' => $user->branch_id,
+            'branch_name' => $user->branch?->branch_name ?? $companyData?->branch_name,
+            'theme_key' => $user->branch?->theme_key ?? 'emerald',
             'role' => $user->role,
             'address' => $user->address,
             'status' => $user->status,
