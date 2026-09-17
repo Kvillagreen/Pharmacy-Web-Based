@@ -27,9 +27,4 @@ class Batch extends Model
         return $this->hasMany(Inventory::class, 'batch_id', 'batch_id');
     }
 
-    public function histories()
-    {
-        return $this->hasMany(BatchHistory::class, 'batch_id', 'batch_id')->latest();
-    }
-
 }

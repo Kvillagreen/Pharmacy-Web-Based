@@ -4,7 +4,6 @@ namespace App\Http\Controllers\v1;
 
 use App\Http\Controllers\Controller;
 use App\Models\v1\Batch;
-use App\Models\v1\Bir2306Record;
 use App\Models\v1\Branch;
 use App\Models\v1\InventoryTransfer;
 use App\Models\v1\Medicine;
@@ -15,107 +14,6 @@ use Illuminate\Support\Facades\DB;
 
 class ReportController extends Controller
 {
-    public function storeBir2306(Request $request)
-    {
-        $data = $request->validate([
-            'company_id' => ['required', 'integer', 'exists:companies,company_id'],
-            'branch_id' => ['required', 'integer', 'exists:branches,branch_id'],
-            'year' => ['required', 'integer', 'min:2000', 'max:' . (now()->year - 1)],
-            'payee_foreign_address' => ['nullable', 'string', 'max:255'],
-            'payee_icr_no' => ['nullable', 'string', 'max:50'],
-            'payor_tin' => ['required', 'string', 'max:30'],
-            'payor_registered_name' => ['required', 'string', 'max:255'],
-            'payor_registered_address' => ['required', 'string', 'max:255'],
-            'payor_zip_code' => ['required', 'string', 'max:10'],
-            'nature_of_income_payment' => ['required', 'string', 'max:255'],
-            'atc' => ['required', 'string', 'max:20'],
-            'payor_signatory_name' => ['required', 'string', 'max:255'],
-            'payor_signatory_title' => ['required', 'string', 'max:255'],
-            'payor_signatory_tin' => ['required', 'string', 'max:30'],
-            'certificate_date' => ['required', 'date'],
-            'payee_signatory_name' => ['required', 'string', 'max:255'],
-            'payee_signatory_title' => ['required', 'string', 'max:255'],
-            'payee_signatory_tin' => ['required', 'string', 'max:30'],
-            'payee_date_signed' => ['required', 'date'],
-            'payor_tax_agent_accreditation_no' => ['nullable', 'string', 'max:100'],
-            'payor_accreditation_date_issued' => ['nullable', 'date'],
-            'payor_accreditation_date_expiry' => ['nullable', 'date'],
-            'payor_attorney_roll_no' => ['nullable', 'string', 'max:100'],
-            'payee_tax_agent_accreditation_no' => ['nullable', 'string', 'max:100'],
-            'payee_accreditation_date_issued' => ['nullable', 'date'],
-            'payee_accreditation_date_expiry' => ['nullable', 'date'],
-            'payee_attorney_roll_no' => ['nullable', 'string', 'max:100'],
-            'substituted_filing_applicable' => ['nullable', 'boolean'],
-            'substituted_payor_signatory_name' => ['required_if:substituted_filing_applicable,true', 'nullable', 'string', 'max:255'],
-            'substituted_payor_signatory_tin' => ['required_if:substituted_filing_applicable,true', 'nullable', 'string', 'max:30'],
-            'substituted_payor_signatory_title' => ['required_if:substituted_filing_applicable,true', 'nullable', 'string', 'max:255'],
-            'substituted_payor_date_signed' => ['required_if:substituted_filing_applicable,true', 'nullable', 'date'],
-            'substituted_payee_signatory_name' => ['required_if:substituted_filing_applicable,true', 'nullable', 'string', 'max:255'],
-            'substituted_payee_signatory_tin' => ['required_if:substituted_filing_applicable,true', 'nullable', 'string', 'max:30'],
-            'substituted_payee_signatory_title' => ['required_if:substituted_filing_applicable,true', 'nullable', 'string', 'max:255'],
-            'substituted_payee_date_signed' => ['required_if:substituted_filing_applicable,true', 'nullable', 'date'],
-        ]);
-
-        $branch = Branch::query()
-            ->with('company')
-            ->where('branch_id', $data['branch_id'])
-            ->where('company_id', $data['company_id'])
-            ->firstOrFail();
-
-        $periodFrom = Carbon::create((int) $data['year'], 1, 1)->startOfDay();
-        $periodTo = Carbon::create((int) $data['year'], 12, 31)->endOfDay();
-
-        $amountOfPayment = round((float) Transaction::query()
-            ->where('branch_id', $branch->branch_id)
-            ->where('status', '!=', 'voided')
-            ->whereBetween('created_at', [$periodFrom, $periodTo])
-            ->sum('total_amount'), 2);
-
-        if ($amountOfPayment <= 0) {
-            return response()->json([
-                'success' => false,
-                'message' => 'No completed, non-voided transactions were found for the selected Form 2306 period.',
-            ], 422);
-        }
-
-        $taxWithheld = round($amountOfPayment * $this->finalWithholdingRateForAtc($data['atc']), 2);
-
-        DB::transaction(function () use ($data, $branch, $periodFrom, $periodTo, $amountOfPayment, $taxWithheld) {
-            $sourceReference = 'MANUAL-2306-' . $branch->branch_id . '-'
-                . $periodFrom->format('Ymd') . '-' . $periodTo->format('Ymd');
-
-            Bir2306Record::updateOrCreate(
-                ['branch_id' => $branch->branch_id, 'source_reference' => $sourceReference],
-                [
-                    ...collect($data)->except(['year'])->toArray(),
-                    'period_from' => $periodFrom->toDateString(),
-                    'period_to' => $periodTo->toDateString(),
-                    'amount_of_payment' => $amountOfPayment,
-                    'tax_withheld' => $taxWithheld,
-                    'source_reference' => $sourceReference,
-                    'is_test_data' => false,
-                ]
-            );
-        });
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Form 2306 details saved successfully.',
-            'data' => [
-                'amount_of_payment' => $amountOfPayment,
-                'tax_withheld' => $taxWithheld,
-            ],
-        ]);
-    }
-
-    private function finalWithholdingRateForAtc(string $atc): float
-    {
-        return match (strtoupper(trim($atc))) {
-            'WV010', 'WV020' => 0.05,
-            default => 0.05,
-        };
-    }
-
     public function index(Request $request)
     {
         $companyId = (int) $request->input('company_id', 0);
@@ -189,9 +87,6 @@ class ReportController extends Controller
                         'transaction_count' => 0,
                         'average_sale' => 0,
                         'total_discount' => 0,
-                        'cost_of_goods_sold' => 0,
-                        'gross_profit' => 0,
-                        'gross_margin_pct' => 0,
                         'inventory_value' => 0,
                         'low_stock_count' => 0,
                         'expiring_30_count' => 0,
@@ -248,16 +143,6 @@ class ReportController extends Controller
         $transactionCount = (int) ($transactionSummary->transaction_count ?? 0);
         $averageSale = $transactionCount > 0 ? round($currentRevenue / $transactionCount, 2) : 0;
         $totalDiscount = (float) ($transactionSummary->total_discount ?? 0);
-
-        $costOfGoodsSold = (float) DB::table('transaction_items')
-            ->join('transactions', 'transaction_items.transaction_id', '=', 'transactions.transaction_id')
-            ->whereIn('transactions.branch_id', $scopeBranchIds)
-            ->where('transactions.status', '!=', 'voided')
-            ->whereBetween('transactions.created_at', [$rangeStart, $rangeEnd])
-            ->selectRaw('COALESCE(SUM(transaction_items.quantity * transaction_items.cost_price), 0) as total_cost')
-            ->value('total_cost');
-        $grossProfit = round($currentRevenue - $costOfGoodsSold, 2);
-        $grossMarginPct = $currentRevenue > 0 ? round(($grossProfit / $currentRevenue) * 100, 2) : 0;
 
         $inventorySummary = DB::table('inventories')
             ->join('medicines', 'medicines.medicine_id', '=', 'inventories.medicine_id')
@@ -355,7 +240,6 @@ class ReportController extends Controller
             ->join('medicines', 'transaction_items.medicine_id', '=', 'medicines.medicine_id')
             ->selectRaw('medicines.category, SUM(transaction_items.quantity) as quantity_sold, COUNT(DISTINCT transactions.transaction_id) as transaction_count')
             ->whereIn('transactions.branch_id', $scopeBranchIds)
-            ->where('transactions.status', '!=', 'voided')
             ->whereBetween('transactions.created_at', [$rangeStart, $rangeEnd])
             ->groupBy('medicines.category')
             ->orderByDesc('quantity_sold')
@@ -412,7 +296,6 @@ class ReportController extends Controller
                 MAX(transactions.created_at) as last_created_at
             ')
             ->whereIn('transactions.branch_id', $scopeBranchIds)
-            ->where('transactions.status', '!=', 'voided')
             ->whereBetween('transactions.created_at', [$rangeStart, $rangeEnd])
             ->groupBy('medicines.medicine_id', 'medicines.medicine_name', 'medicines.generic_name', 'medicines.category')
             ->orderByDesc('quantity_sold')
@@ -509,7 +392,6 @@ class ReportController extends Controller
         $recentTransactions = Transaction::query()
             ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name', 'attachments'])
             ->whereIn('branch_id', $scopeBranchIds)
-            ->where('status', '!=', 'voided')
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->latest('created_at')
             ->limit(10)
@@ -526,7 +408,6 @@ class ReportController extends Controller
                 'patient_name' => $transaction->patient_name,
                 'total_amount' => (float) $transaction->total_amount,
                 'discount' => (float) ($transaction->discount ?? 0),
-                'batch_numbers' => $transaction->items->pluck('batch_number')->filter()->unique()->values()->all(),
                 'created_at' => $transaction->created_at,
             ])
             ->values();
@@ -534,7 +415,6 @@ class ReportController extends Controller
         $prescribedTransactions = Transaction::query()
             ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name', 'attachments'])
             ->whereIn('branch_id', $scopeBranchIds)
-            ->where('status', '!=', 'voided')
             ->whereIn('regulated_classification', ['controlled', 'mixed'])
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->latest('created_at')
@@ -581,7 +461,6 @@ class ReportController extends Controller
         $dangerousTransactions = Transaction::query()
             ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name'])
             ->whereIn('branch_id', $scopeBranchIds)
-            ->where('status', '!=', 'voided')
             ->whereIn('regulated_classification', ['dangerous', 'mixed'])
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->latest('created_at')
@@ -618,9 +497,6 @@ class ReportController extends Controller
                     'transaction_count' => $transactionCount,
                     'average_sale' => round($averageSale, 2),
                     'total_discount' => round($totalDiscount, 2),
-                    'cost_of_goods_sold' => round($costOfGoodsSold, 2),
-                    'gross_profit' => $grossProfit,
-                    'gross_margin_pct' => $grossMarginPct,
                     'inventory_value' => round($inventoryValue, 2),
                     'low_stock_count' => $lowStockCount,
                     'expiring_30_count' => $expiring30Count,
@@ -687,7 +563,6 @@ class ReportController extends Controller
 
             ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
             ->where('branch_id', $branch->branch_id)
-            ->where('status', '!=', 'voided')
             ->whereBetween('created_at', [$yearStart, $yearEnd])
             ->selectRaw('
                 COALESCE(SUM(sub_total), 0) as gross_sales,
@@ -700,13 +575,7 @@ class ReportController extends Controller
         $grossSales = round((float) ($transactionSummary->gross_sales ?? 0), 2);
         $salesDiscounts = round((float) ($transactionSummary->sales_discounts ?? 0), 2);
         $netSales = round(max($grossSales - $salesDiscounts, 0), 2);
-        $costOfSales = round((float) DB::table('transaction_items')
-            ->join('transactions', 'transaction_items.transaction_id', '=', 'transactions.transaction_id')
-            ->where('transactions.branch_id', $branch->branch_id)
-            ->where('transactions.status', '!=', 'voided')
-            ->whereBetween('transactions.created_at', [$yearStart, $yearEnd])
-            ->selectRaw('COALESCE(SUM(transaction_items.quantity * transaction_items.cost_price), 0) as total_cost')
-            ->value('total_cost'), 2);
+        $costOfSales = 0.00;
         $grossIncome = round($netSales - $costOfSales, 2);
         $deductions = 0.00;
         $taxableNetIncome = round(max($grossIncome - $deductions, 0), 2);
@@ -723,47 +592,6 @@ class ReportController extends Controller
         $telephoneNumber = trim((string) ($branch->branch_contact ?? ''));
         $taxpayerName = trim(($branch->company?->company_name ?? 'Pharmacy') . ' - ' . $branch->branch_name . ' Branch');
         $lineOfBusiness = 'Retail Pharmacy / Drugstore Operations';
-        $withholdingQuery = Bir2306Record::query()
-            ->where('company_id', $validated['company_id'])
-            ->where('branch_id', $branch->branch_id)
-            ->whereDate('period_from', '>=', $yearStart->toDateString())
-            ->whereDate('period_to', '<=', $yearEnd->toDateString());
-        if ((clone $withholdingQuery)->where('is_test_data', false)->exists()) {
-            $withholdingQuery->where('is_test_data', false);
-        }
-        $withholdingRecords = $withholdingQuery
-            ->orderBy('period_from')
-            ->get();
-        $firstWithholdingRecord = $withholdingRecords->first();
-        $incomePayments = $withholdingRecords->map(fn (Bir2306Record $record) => [
-            'nature_of_income_payment' => $record->nature_of_income_payment,
-            'atc' => $record->atc,
-            'amount_of_payment' => (float) $record->amount_of_payment,
-            'tax_withheld' => (float) $record->tax_withheld,
-            'period_from' => $record->period_from?->toDateString(),
-            'period_to' => $record->period_to?->toDateString(),
-            'source_reference' => $record->source_reference,
-            'is_test_data' => (bool) $record->is_test_data,
-        ])->values();
-        $totalIncomePayment = round((float) $withholdingRecords->sum('amount_of_payment'), 2);
-        $totalTaxWithheld = round((float) $withholdingRecords->sum('tax_withheld'), 2);
-        $form2306MissingFields = collect([
-            empty($branch->company?->tin_number) ? 'Payee TIN' : null,
-            empty($branch->company?->company_name) ? 'Payee registered name' : null,
-            empty($registeredAddress) ? 'Payee registered address' : null,
-            empty($branch->zip_code) ? 'Payee ZIP code' : null,
-            $withholdingRecords->isEmpty() ? 'At least one actual withholding-agent income payment record' : null,
-            $withholdingRecords->contains(fn (Bir2306Record $record) => $record->is_test_data)
-                ? 'Test withholding records must be replaced with actual certificates before issuance' : null,
-            $firstWithholdingRecord && empty($firstWithholdingRecord->payor_signatory_name)
-                ? 'Payor authorized representative/signatory' : null,
-            $firstWithholdingRecord && empty($firstWithholdingRecord->payee_signatory_name)
-                ? 'Payee authorized representative/signatory' : null,
-            $firstWithholdingRecord && empty($firstWithholdingRecord->certificate_date)
-                ? 'Payor date signed' : null,
-            $firstWithholdingRecord && empty($firstWithholdingRecord->payee_date_signed)
-                ? 'Payee date signed' : null,
-        ])->filter()->values();
 
         return response()->json([
             'success' => true,
@@ -787,91 +615,6 @@ class ReportController extends Controller
                 'line_of_business' => $lineOfBusiness,
                 'registered_address' => $registeredAddress,
                 'telephone_number' => $telephoneNumber,
-                'form_2306' => [
-                    'form_name' => 'Certificate of Final Tax Withheld at Source',
-                    'form_revision' => 'January 2018 (ENCS)',
-                    'period_from' => $selectedYear . '-01-01',
-                    'period_to' => $selectedYear . '-12-31',
-                    'payee' => [
-                        'tin' => $branch->company?->tin_number,
-                        'registered_name' => $branch->company?->company_name,
-                        'registered_address' => $registeredAddress,
-                        'zip_code' => $branch->zip_code,
-                        'foreign_address' => null,
-                    ],
-                    'withholding_agent' => [
-                        'tin' => $firstWithholdingRecord?->payor_tin,
-                        'registered_name' => $firstWithholdingRecord?->payor_registered_name,
-                        'registered_address' => $firstWithholdingRecord?->payor_registered_address,
-                        'zip_code' => $firstWithholdingRecord?->payor_zip_code,
-                    ],
-                    'income_payments' => $incomePayments,
-                    'total_income_payment' => $totalIncomePayment,
-                    'total_tax_withheld' => $totalTaxWithheld,
-                    'payor_signatory' => $firstWithholdingRecord ? [
-                        'name' => $firstWithholdingRecord->payor_signatory_name,
-                        'tin' => $firstWithholdingRecord->payor_signatory_tin,
-                        'title' => $firstWithholdingRecord->payor_signatory_title,
-                        'certificate_date' => $firstWithholdingRecord->certificate_date?->toDateString(),
-                    ] : null,
-                    'is_ready_to_issue' => $form2306MissingFields->isEmpty(),
-                    'missing_fields' => $form2306MissingFields,
-                    'compliance_note' => 'Form 2306 values come only from recorded final-tax withholding certificates. Ordinary POS sales are not treated as withholding records.',
-                    'part_i_payee' => [
-                        'tin' => $branch->company?->tin_number,
-                        'name' => $branch->company?->company_name,
-                        'registered_address' => $registeredAddress,
-                        'zip_code' => $branch->zip_code,
-                        'foreign_address' => $firstWithholdingRecord?->payee_foreign_address,
-                        'icr_no' => $firstWithholdingRecord?->payee_icr_no,
-                    ],
-                    'part_ii_payor' => [
-                        'tin' => $firstWithholdingRecord?->payor_tin,
-                        'name' => $firstWithholdingRecord?->payor_registered_name,
-                        'registered_address' => $firstWithholdingRecord?->payor_registered_address,
-                        'zip_code' => $firstWithholdingRecord?->payor_zip_code,
-                    ],
-                    'part_iii_income_payment_and_tax_withheld' => [
-                        'rows' => $incomePayments,
-                        'total_amount_of_payment' => $totalIncomePayment,
-                        'total_tax_withheld' => $totalTaxWithheld,
-                    ],
-                    'payor_declaration' => $firstWithholdingRecord ? [
-                        'signature_over_printed_name' => $firstWithholdingRecord->payor_signatory_name,
-                        'title_designation' => $firstWithholdingRecord->payor_signatory_title,
-                        'tin' => $firstWithholdingRecord->payor_signatory_tin,
-                        'date_signed' => $firstWithholdingRecord->certificate_date?->toDateString(),
-                        'tax_agent_accreditation_no' => $firstWithholdingRecord->payor_tax_agent_accreditation_no,
-                        'date_of_issue' => $firstWithholdingRecord->payor_accreditation_date_issued?->toDateString(),
-                        'date_of_expiry' => $firstWithholdingRecord->payor_accreditation_date_expiry?->toDateString(),
-                        'attorney_roll_no' => $firstWithholdingRecord->payor_attorney_roll_no,
-                    ] : null,
-                    'payee_conforme' => $firstWithholdingRecord ? [
-                        'signature_over_printed_name' => $firstWithholdingRecord->payee_signatory_name,
-                        'title_designation' => $firstWithholdingRecord->payee_signatory_title,
-                        'tin' => $firstWithholdingRecord->payee_signatory_tin,
-                        'date_signed' => $firstWithholdingRecord->payee_date_signed?->toDateString(),
-                        'tax_agent_accreditation_no' => $firstWithholdingRecord->payee_tax_agent_accreditation_no,
-                        'date_of_issue' => $firstWithholdingRecord->payee_accreditation_date_issued?->toDateString(),
-                        'date_of_expiry' => $firstWithholdingRecord->payee_accreditation_date_expiry?->toDateString(),
-                        'attorney_roll_no' => $firstWithholdingRecord->payee_attorney_roll_no,
-                    ] : null,
-                    'substituted_filing' => $firstWithholdingRecord ? [
-                        'applicable' => (bool) $firstWithholdingRecord->substituted_filing_applicable,
-                        'payor_declaration' => [
-                            'signature_over_printed_name' => $firstWithholdingRecord->substituted_payor_signatory_name,
-                            'title_designation' => $firstWithholdingRecord->substituted_payor_signatory_title,
-                            'tin' => $firstWithholdingRecord->substituted_payor_signatory_tin,
-                            'date_signed' => $firstWithholdingRecord->substituted_payor_date_signed?->toDateString(),
-                        ],
-                        'payee_declaration' => [
-                            'signature_over_printed_name' => $firstWithholdingRecord->substituted_payee_signatory_name,
-                            'title_designation' => $firstWithholdingRecord->substituted_payee_signatory_title,
-                            'tin' => $firstWithholdingRecord->substituted_payee_signatory_tin,
-                            'date_signed' => $firstWithholdingRecord->substituted_payee_date_signed?->toDateString(),
-                        ],
-                    ] : null,
-                ],
                 'basic_tax_payment' => $basicTaxPayment,
                 'surcharge' => $surcharge,
                 'interest' => $interest,
@@ -887,45 +630,12 @@ class ReportController extends Controller
                 'taxable_net_income' => $taxableNetIncome,
                 'income_tax_rate' => $incomeTaxRate,
                 'income_tax_due' => $incomeTaxDue,
-                'computation' => [
-                    'gross_sales_receipts' => $grossSales,
-                    'less_sales_discounts' => $salesDiscounts,
-                    'net_sales_receipts' => $netSales,
-                    'less_cost_of_sales' => $costOfSales,
-                    'gross_income' => $grossIncome,
-                    'less_deductions' => $deductions,
-                    'taxable_net_income' => $taxableNetIncome,
-                    'income_tax_rate' => $incomeTaxRate,
-                    'income_tax_due' => $incomeTaxDue,
-                    'basic_tax_payment' => $basicTaxPayment,
-                    'surcharge' => $surcharge,
-                    'interest' => $interest,
-                    'compromise' => $compromise,
-                    'total_amount_payable' => $totalAmountPayable,
-                    'formula_notes' => [
-                        'Net sales receipts = gross sales receipts - sales discounts.',
-                        'Gross income = net sales receipts - cost of sales.',
-                        'Taxable net income = gross income - deductions.',
-                        'Income tax due = taxable net income x income tax rate.',
-                        'Total amount payable = basic tax payment + surcharge + interest + compromise.',
-                    ],
-                ],
                 'is_ready_to_file' => false,
-                'data_sources' => [
-                    ['label' => 'Gross Sales', 'source' => 'Completed POS transactions for the selected branch and year; sum of transactions.sub_total.'],
-                    ['label' => 'Sales Discounts', 'source' => 'Recorded senior, PWD, and other transaction discounts; sum of transactions.discount.'],
-                    ['label' => 'Cost of Sales', 'source' => 'Quantity dispensed multiplied by the batch cost snapshot saved in each transaction item.'],
-                    ['label' => 'Gross Income', 'source' => 'Calculated as net sales receipts minus cost of sales.'],
-                    ['label' => 'Deductions', 'source' => 'Currently 0 because an operating-expenses and allowable-deductions ledger has not been implemented.'],
-                    ['label' => '25% Tax Rate', 'source' => 'Reference assumption only; it is not selected from the pharmacy tax profile and must be confirmed by an accountant.'],
-                    ['label' => 'Surcharge, Interest, and Compromise', 'source' => 'Currently 0 because no BIR assessment or penalty record was entered.'],
-                    ['label' => 'Form 2306', 'source' => 'Explicit final-tax withholding records plus company and branch registration details; ordinary POS sales are excluded.'],
-                ],
                 'data_notes' => [
                     'This output follows the BIR Form 2306 payment-form layout using the currently available sales and tax summary data in the system.',
                     'ATC, tax type code, due date, and payment classification should still be validated against the actual liability being paid before filing.',
                     'Basic tax payment is derived from the computed annual tax due in the current report, while surcharge, interest, and compromise are set to 0.00 unless manually assessed.',
-                    'Please reconcile this branch tax payment summary with your accountant and official filing requirements before submission.',
+                    'Please reconcile this payment summary with your accountant and official BIR filing requirements before submission.',
                 ],
             ],
         ]);

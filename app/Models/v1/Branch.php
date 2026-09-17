@@ -16,7 +16,6 @@ class Branch extends Model
     'branch_name',
     'branch_address',
     'branch_contact',
-    'zip_code',
     'theme_key',
     'status',
 ];

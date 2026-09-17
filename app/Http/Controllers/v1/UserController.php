@@ -19,11 +19,10 @@ class UserController extends Controller
     private function defaultRolePermissionNames(string $role): array
     {
         return match ($role) {
-            'staff' => ['sales', 'sms', 'inventory', 'fefo', 'drugs', 'settings'],
-            'pharmacist' => ['sales', 'sms', 'inventory', 'fefo', 'drugs'],
-            'branch_manager' => ['dashboard', 'sales', 'inventory', 'fefo', 'reports'],
-            'owner', 'admin' => ['dashboard', 'sales', 'sms', 'inventory', 'fefo', 'drugs', 'reports', 'users', 'settings', 'branches'],
-            'super_admin' => ['dashboard', 'sms', 'inventory', 'fefo', 'drugs', 'reports', 'users', 'settings', 'branches'],
+            'staff' => ['dashboard', 'sales', 'sms', 'inventory', 'delivery'],
+            'pharmacist' => ['sales', 'sms', 'inventory', 'fefo', 'drugs', 'delivery'],
+            'branch_manager' => ['dashboard', 'inventory', 'fefo', 'delivery', 'reports'],
+            'owner', 'admin', 'super_admin' => ['dashboard', 'sales', 'sms', 'inventory', 'fefo', 'drugs', 'delivery', 'reports', 'users', 'settings', 'branches'],
             default => ['dashboard'],
         };
     }
@@ -58,7 +57,6 @@ class UserController extends Controller
             'permission_names' => $user->permissions
                 ->pluck('permission_name')
                 ->values(),
-            'has_manager_pin' => !empty($user->manager_pin_hash),
         ];
     }
 
@@ -233,16 +231,7 @@ class UserController extends Controller
             'address' => ['required', 'string', 'max:500'],
             'permission_ids' => ['nullable', 'array'],
             'permission_ids.*' => ['integer', 'exists:permissions,permission_id'],
-            'manager_pin' => ['nullable', 'string', 'regex:/^\d{4,8}$/'],
         ]);
-
-        if (in_array($validated['role'], ['branch_manager', 'owner', 'admin'], true)
-            && empty($validated['manager_pin'])) {
-            return response()->json([
-                'success' => false,
-                'message' => 'A 4 to 8 digit manager PIN is required for this role.',
-            ], 422);
-        }
 
         $authCompanyId = $authUser->branch?->company_id;
 
@@ -278,9 +267,6 @@ class UserController extends Controller
                 'role' => $validated['role'],
                 'address' => $validated['address'],
                 'status' => 'approved',
-                'manager_pin_hash' => !empty($validated['manager_pin'])
-                    ? Hash::make($validated['manager_pin'])
-                    : null,
             ]);
 
             $user->permissions()->sync(
@@ -331,25 +317,7 @@ class UserController extends Controller
             ],
             'address' => ['nullable', 'string', 'max:500'],
             'role' => ['nullable', Rule::in(['staff', 'pharmacist', 'owner', 'branch_manager', 'admin'])],
-            'manager_pin' => ['nullable', 'string', 'regex:/^\d{4,8}$/'],
         ]);
-
-        $resultingRole = $validated['role'] ?? $user->role;
-        if (in_array($resultingRole, ['branch_manager', 'owner', 'admin'], true)
-            && !$user->manager_pin_hash
-            && empty($validated['manager_pin'])) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Set a 4 to 8 digit manager PIN before assigning this role.',
-            ], 422);
-        }
-
-        if (!empty($validated['manager_pin'])) {
-            $validated['manager_pin_hash'] = Hash::make($validated['manager_pin']);
-        } elseif (!in_array($resultingRole, ['branch_manager', 'owner', 'admin'], true)) {
-            $validated['manager_pin_hash'] = null;
-        }
-        unset($validated['manager_pin']);
 
         $originalRole = $user->role;
         $user->update($validated);
@@ -448,7 +416,6 @@ class UserController extends Controller
     public function permissionOptions()
     {
         $permissions = Permission::query()
-            ->where('permission_name', '!=', 'delivery')
             ->orderBy('permission_name')
             ->get(['permission_id', 'permission_name', 'description']);
 
@@ -470,7 +437,6 @@ class UserController extends Controller
         }
 
         $permissions = Permission::query()
-            ->where('permission_name', '!=', 'delivery')
             ->orderBy('permission_name')
             ->get(['permission_id', 'permission_name', 'description']);
 

@@ -19,12 +19,8 @@ class Medicine extends Model
         "medicine_name",
         "generic_name",
         "category",
-        "pricing_type",
-        "cost_price",
-        "markup_percent",
         "stocks",
         "unit",
-        "units_per_box",
         "dosage",
         "price",
         "type",
@@ -34,12 +30,6 @@ class Medicine extends Model
         "needs_protection",
         "status",
         ];
-    protected $casts = [
-        'archived_at' => 'datetime',
-        'cost_price' => 'decimal:2',
-        'markup_percent' => 'decimal:2',
-        'price' => 'decimal:2',
-    ];
     protected $columnMap = [
     ];
 
@@ -47,11 +37,6 @@ class Medicine extends Model
     public function inventories()
     {
         return $this->hasOne(Inventory::class, 'medicine_id', 'medicine_id');
-    }
-
-    public function batches()
-    {
-        return $this->hasManyThrough(Batch::class, Inventory::class, 'medicine_id', 'batch_id', 'medicine_id', 'batch_id');
     }
 
     public function transactionItems()

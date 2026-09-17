@@ -4,12 +4,7 @@ namespace App\Http\Controllers\v1;
 
 use App\Http\Controllers\Controller;
 use App\Services\v1\FortmedSmsService;
-use App\Models\v1\Branch;
-use App\Models\v1\Inventory;
-use App\Models\v1\Medicine;
-use App\Models\v1\SmsOrder;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class SmsController extends Controller
 {
@@ -25,136 +20,6 @@ class SmsController extends Controller
             'message' => $message,
             'data' => $data,
         ], $status);
-    }
-
-    public function receiver(Request $request)
-    {
-        $data = $request->validate([
-            'from_number' => ['required_without:customer_number', 'nullable', 'string', 'max:30'],
-            'customer_number' => ['required_without:from_number', 'nullable', 'string', 'max:30'],
-            'message_body' => ['required_without:message', 'nullable', 'string', 'max:500'],
-            'message' => ['required_without:message_body', 'nullable', 'string', 'max:500'],
-            'branch_id' => ['nullable', 'integer', 'exists:branches,branch_id'],
-            'provider_message_id' => ['nullable', 'string', 'max:255'],
-        ]);
-
-        $customerNumber = trim((string) ($data['customer_number'] ?? $data['from_number']));
-        $messageBody = trim((string) ($data['message_body'] ?? $data['message']));
-        $branch = Branch::query()
-            ->where('status', 'active')
-            ->when(!empty($data['branch_id']), fn ($query) => $query->where('branch_id', $data['branch_id']))
-            ->orderBy('branch_id')
-            ->first();
-
-        if (!$branch) {
-            return $this->response(false, 'No active branch is available for this SMS order.', null, 422);
-        }
-
-        if (!preg_match('/^MED\s+(.+)$/i', $messageBody, $matches)) {
-            return $this->response(false, 'Invalid order format. Use MED <medicine_id> <quantity>, <medicine_id> <quantity>.', null, 422);
-        }
-
-        $requested = [];
-        foreach (preg_split('/\s*,\s*|\R+/', trim($matches[1])) as $line) {
-            if (!preg_match('/^(\d+)\s+(\d+)$/', trim($line), $parts) || (int) $parts[2] < 1) {
-                return $this->response(false, 'Invalid order item. Use <medicine_id> <quantity> for every item.', null, 422);
-            }
-
-            $medicineId = (int) $parts[1];
-            $requested[$medicineId] = ($requested[$medicineId] ?? 0) + (int) $parts[2];
-        }
-
-        $medicines = Medicine::query()->whereIn('medicine_id', array_keys($requested))->get()->keyBy('medicine_id');
-        $orderItems = [];
-        $totalPrice = 0.0;
-
-        foreach ($requested as $medicineId => $quantity) {
-            $medicine = $medicines->get($medicineId);
-            if (!$medicine) {
-                return $this->response(false, "Medicine {$medicineId} was not found.", null, 422);
-            }
-
-            $availableStock = (int) Inventory::query()
-                ->where('branch_id', $branch->branch_id)
-                ->where('medicine_id', $medicineId)
-                ->sum('stocks');
-            if ($availableStock < $quantity) {
-                return $this->response(false, "Medicine {$medicineId} has insufficient stock.", null, 422);
-            }
-
-            $unitPrice = round((float) $medicine->price, 2);
-            $lineTotal = round($unitPrice * $quantity, 2);
-            $totalPrice += $lineTotal;
-            $orderItems[] = compact('medicineId', 'quantity', 'unitPrice', 'lineTotal');
-        }
-
-        $order = DB::transaction(function () use ($branch, $customerNumber, $messageBody, $data, $orderItems, $totalPrice) {
-            $order = SmsOrder::create([
-                'branch_id' => $branch->branch_id,
-                'customer_number' => $customerNumber,
-                'message_body' => $messageBody,
-                'provider_message_id' => $data['provider_message_id'] ?? null,
-                'status' => 'pending',
-                'total_price' => round($totalPrice, 2),
-            ]);
-
-            foreach ($orderItems as $item) {
-                $order->items()->create([
-                    'medicine_id' => $item['medicineId'],
-                    'quantity' => $item['quantity'],
-                    'unit_price' => $item['unitPrice'],
-                    'line_total' => $item['lineTotal'],
-                ]);
-            }
-
-            return $order->load('items.medicine');
-        });
-
-        return $this->response(true, 'SMS order created successfully.', [
-            'order_id' => $order->sms_order_id,
-            'status' => $order->status,
-            'customer_number' => $order->customer_number,
-            'total_price' => (float) $order->total_price,
-            'items' => $order->items->map(fn ($item) => [
-                'medicine_id' => $item->medicine_id,
-                'medicine_name' => $item->medicine?->medicine_name,
-                'quantity' => $item->quantity,
-                'unit_price' => (float) $item->unit_price,
-                'line_total' => (float) $item->line_total,
-            ])->values(),
-        ], 201);
-    }
-
-    public function orders(Request $request)
-    {
-        $user = $request->user();
-        $query = SmsOrder::query()
-            ->with(['items.medicine'])
-            ->orderByDesc('sms_order_id');
-
-        if ($user && !in_array($user->role, ['owner', 'admin', 'super_admin'], true)) {
-            $query->where('branch_id', $user->branch_id);
-        } elseif ($request->filled('branch_id')) {
-            $query->where('branch_id', (int) $request->input('branch_id'));
-        }
-
-        $orders = $query->limit(50)->get()->map(fn (SmsOrder $order) => [
-            'order_id' => $order->sms_order_id,
-            'customer_number' => $order->customer_number,
-            'message_body' => $order->message_body,
-            'status' => $order->status,
-            'total_price' => (float) $order->total_price,
-            'created_at' => $order->created_at,
-            'items' => $order->items->map(fn ($item) => [
-                'medicine_id' => $item->medicine_id,
-                'medicine_name' => $item->medicine?->medicine_name,
-                'quantity' => $item->quantity,
-                'unit_price' => (float) $item->unit_price,
-                'line_total' => (float) $item->line_total,
-            ])->values(),
-        ])->values();
-
-        return $this->response(true, 'SMS orders loaded successfully.', ['orders' => $orders]);
     }
 
     public function replies(Request $request)

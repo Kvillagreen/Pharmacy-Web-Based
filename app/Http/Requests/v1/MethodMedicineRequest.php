@@ -17,33 +17,16 @@ class MethodMedicineRequest extends FormRequest
         return true;
     }
 
-    protected function prepareForValidation(): void
-    {
-        $pricingType = strtolower(trim((string) $this->input('pricing_type', 'branded')));
-        $pricingType = in_array($pricingType, ['branded', 'generic'], true) ? $pricingType : 'branded';
-        $markupPercent = $pricingType === 'generic' ? 50 : 10;
-        $costPrice = (float) $this->input('cost_price', 0);
-
-        $this->merge([
-            'pricing_type' => $pricingType,
-            'markup_percent' => $markupPercent,
-            'price' => round($costPrice * (1 + ($markupPercent / 100)), 2),
-        ]);
-    }
-
     // Validation rules
     public function rules(): array
     {
         return [
             'inventory_id' => ['nullable', 'integer', 'exists:inventories,inventory_id'],
             'batch_id' => ['nullable', 'integer', 'exists:batches,batch_id'],
-            'batch_number' => ['nullable', 'string', 'max:120'],
+            'batch_number' => ['required', 'string', 'max:120'],
             'medicine_name' => ['required', 'string'],
             'generic_name' => ['required', 'string'],
-            'pricing_type' => ['required', 'in:branded,generic'],
-            'cost_price' => ['required', 'numeric', 'gt:0'],
-            'markup_percent' => ['required', 'numeric', 'in:10,50'],
-            'price' => ['required', 'numeric', 'gt:0'],
+            'price' => ['required', 'numeric', 'min:1'], // price must be at least 1
             'category' => ['required', 'string'],
             'reorder_level' => ['required', 'int', 'min:0'], // ≥ 0
             'stocks' => ['required', 'int', 'min:0'],       // ≥ 0
@@ -53,7 +36,6 @@ class MethodMedicineRequest extends FormRequest
             'pcs_per_container' => ['nullable', 'integer', 'min:0'],
             'dosage' => ['required', 'int', 'min:0'],       // ≥ 0
             'unit' => ['required', 'string'],
-            'units_per_box' => ['required', 'integer', 'min:1', 'max:10000'],
             'type' => ['required', 'string'],
             'is_dangerous' => ['required', 'boolean'],
             'needs_protection' => ['required', 'boolean'],
@@ -138,10 +120,6 @@ class MethodMedicineRequest extends FormRequest
             'batch_number.required' => 'Batch Number is required.',
             'generic_name.required' => 'Generic Name is required.', // fixed typo
             'price.required' => 'Price is required.',
-            'pricing_type.required' => 'Medicine pricing type is required.',
-            'pricing_type.in' => 'Medicine pricing type must be branded or generic.',
-            'cost_price.required' => 'Cost Price is required.',
-            'cost_price.gt' => 'Cost Price must be greater than 0.',
             'category.required' => 'Category is required.',
             'reorder_level.required' => 'Reorder Level is required.',
             'stocks.required' => 'Stocks is required.',
@@ -159,7 +137,7 @@ class MethodMedicineRequest extends FormRequest
             'location.required' => 'Location is required.',
 
             // Min value messages
-            'price.gt' => 'Retail Price must be greater than 0.',
+            'price.min' => 'Price must be greater than 0.',
             'reorder_level.min' => 'Reorder Level cannot be negative.',
             'stocks.min' => 'Stocks cannot be negative.',
             'dosage.min' => 'Dosage cannot be negative.',

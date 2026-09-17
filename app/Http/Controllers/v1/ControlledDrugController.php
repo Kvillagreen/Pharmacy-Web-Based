@@ -92,36 +92,25 @@ class ControlledDrugController extends Controller
                 medicines.dosage,
                 medicines.unit,
                 medicines.type,
-                medicines.units_per_box,
                 medicines.price,
                 inventories.stocks,
-                FLOOR(inventories.stocks / GREATEST(medicines.units_per_box, 1)) AS box_count,
-                MOD(inventories.stocks, GREATEST(medicines.units_per_box, 1)) AS loose_units,
                 medicines.reorder_level,
                 medicines.is_dangerous,
                 medicines.needs_protection,
                 batches.batch_id,
-                batches.batch_number,
                 batches.expiry_date,
-                batches.mfg_date,
                 batches.received_date,
                 batches.location,
-                batches.status AS batch_status,
                 inventories.updated_at
             ")
             ->whereIn('inventories.branch_id', $scopeBranchIds)
-            ->whereNull('medicines.archived_at')
             ->where(function ($query) {
                 $query->where('medicines.is_dangerous', true)
                     ->orWhere('medicines.needs_protection', true);
             })
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
-<<<<<<< HEAD
                     ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
-=======
-                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed', 'archived']);
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
             })
             ->when($search !== '', function ($query) use ($search) {
                 $query->where(function ($nested) use ($search) {
@@ -156,18 +145,13 @@ class ControlledDrugController extends Controller
             ->join('inventories', 'medicines.medicine_id', '=', 'inventories.medicine_id')
             ->leftJoin('batches', 'inventories.batch_id', '=', 'batches.batch_id')
             ->whereIn('inventories.branch_id', $scopeBranchIds)
-            ->whereNull('medicines.archived_at')
             ->where(function ($query) {
                 $query->where('medicines.is_dangerous', true)
                     ->orWhere('medicines.needs_protection', true);
             })
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
-<<<<<<< HEAD
                     ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
-=======
-                    ->orWhereNotIn('batches.status', ['pulled_out', 'disposed', 'archived']);
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
             })
             ->select(
                 'medicines.medicine_id',

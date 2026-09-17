@@ -47,12 +47,8 @@ class MethodTransactionRequest extends FormRequest
                 'SC',
                 'PWD',
                 'SCPWD',
-                'senior',
-                'pwd',
-                'Senior',
-                'PWD',
             ])],
-            'scpwd_id_number' => ['nullable', 'string', 'max:50'],
+            'scpwd_id_number' => ['nullable', 'string', 'max:13', 'regex:/^(?:\d{12}|OSCA-\d{8})$/'],
 
             'patient_name' => ['nullable', 'string', 'max:150'],
             'membership_id' => ['nullable', 'string', 'max:100'],
@@ -78,7 +74,7 @@ class MethodTransactionRequest extends FormRequest
             'customer_postal_code' => ['nullable', 'string', 'max:20'],
             'customer_country' => ['nullable', 'string', 'max:80'],
             'prescriber_clinic_address' => ['nullable', 'string', 'max:255'],
-            'prescriber_s2_license_number' => ['nullable', 'string', 'size:12', 'regex:/^\d{12}$/'],
+            'prescriber_s2_license_number' => ['nullable', 'string', 'max:100'],
             'prescriber_ptr_number' => ['nullable', 'string', 'size:16', 'regex:/^PTR-\d{4}-\d{7}$/'],
             'yellow_prescription_serial_number' => ['nullable', 'string', 'size:13', 'regex:/^YP\d{11}$/'],
             'dangerous_quantity_in_words' => ['nullable', 'string', 'max:150'],
@@ -91,8 +87,6 @@ class MethodTransactionRequest extends FormRequest
 
             'items' => ['required', 'array', 'min:1'],
             'items.*.medicine_id' => ['required', 'integer', 'exists:medicines,medicine_id'],
-            'items.*.inventory_id' => ['nullable', 'integer', 'exists:inventories,inventory_id'],
-            'items.*.batch_id' => ['nullable', 'integer', 'exists:batches,batch_id'],
             'items.*.quantity' => ['required', 'integer', 'min:1'],
         ];
     }
@@ -110,8 +104,6 @@ class MethodTransactionRequest extends FormRequest
             'items.*.medicine_id.required' => 'Medicine ID is required for each item.',
             'items.*.quantity.required' => 'Quantity is required for each item.',
             'prescriber_prc_license_number.regex' => 'PRC license number must be a 7-digit code.',
-            'prescriber_s2_license_number.size' => 'S-2 license number must contain exactly 12 digits.',
-            'prescriber_s2_license_number.regex' => 'S-2 license number must contain exactly 12 digits.',
             'scpwd_id_number.regex' => 'SC/PWD ID must be a 12-digit PWD number or OSCA-########.',
             'prescriber_ptr_number.size' => 'PTR number must be exactly 16 characters.',
             'prescriber_ptr_number.regex' => 'PTR number must use PTR-YYYY-####### format.',
@@ -134,13 +126,8 @@ class MethodTransactionRequest extends FormRequest
                 $validator->errors()->add('reference_number', 'Reference number is only allowed for card or Gcash payments.');
             }
 
-<<<<<<< HEAD
             if (in_array($this->input('discount_type'), ['SC', 'PWD', 'SCPWD'], true) && !filled($this->input('scpwd_id_number'))) {
                 $validator->errors()->add('scpwd_id_number', 'Discount ID number is required for SC/PWD discounts.');
-=======
-            if (in_array($this->input('discount_type'), ['SCPWD', 'senior', 'pwd', 'Senior', 'PWD'], true) && !filled($this->input('scpwd_id_number'))) {
-                $validator->errors()->add('scpwd_id_number', 'SC/PWD ID number is required for SC/PWD discounts.');
->>>>>>> f828ce2 (Add BIR 2306 records, SMS orders, batch history, inventory revisions)
             }
 
             $requirements = $this->regulatedRequirementsInPayload();
@@ -202,6 +189,7 @@ class MethodTransactionRequest extends FormRequest
                     'dangerous_quantity_in_figures' => 'Exact quantity in figures is required for dangerous drug transactions.',
                     'dangerous_total_dosage' => 'Total dosage is required for dangerous drug transactions.',
                     'dangerous_treatment_duration' => 'Treatment duration is required for dangerous drug transactions.',
+                    'receiver_signature' => 'Receiver signature is required for dangerous drug transactions.',
                 ];
 
                 foreach ($dangerousFields as $field => $message) {

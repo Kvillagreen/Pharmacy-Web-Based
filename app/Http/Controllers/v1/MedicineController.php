@@ -13,7 +13,6 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 class MedicineController extends Controller
 {
@@ -95,16 +94,16 @@ class MedicineController extends Controller
             ->join('branches', 'inventories.branch_id', '=', 'branches.branch_id')
             ->leftJoin('companies', 'branches.company_id', '=', 'companies.company_id')
             ->select([
-                DB::raw('MAX(inventories.inventory_id) as inventory_id'),
-                DB::raw('MAX(inventories.branch_id) as branch_id'),
-                DB::raw('MAX(companies.company_name) as company_name'),
-                DB::raw('GROUP_CONCAT(DISTINCT branches.branch_name SEPARATOR ", ") as branch_name'),
-                DB::raw('MAX(branches.branch_address) as branch_address'),
-                DB::raw('MAX(branches.branch_contact) as branch_contact'),
-                DB::raw('MAX(medicines.medicine_id) as medicine_id'),
+                'inventories.inventory_id',
+                'inventories.branch_id',
+                'companies.company_name',
+                'branches.branch_name',
+                'branches.branch_address',
+                'branches.branch_contact',
+                'medicines.medicine_id',
                 'medicines.medicine_name',
                 'medicines.generic_name',
-                DB::raw('MAX(medicines.category) as category'),
+                'medicines.category',
                 'medicines.type',
                 'medicines.dosage',
                 'medicines.unit',
@@ -120,14 +119,6 @@ class MedicineController extends Controller
                 'batches.expiry_date',
                 'batches.received_date',
             ])
-            ->groupBy([
-                'medicines.medicine_name',
-                'medicines.generic_name',
-                'medicines.type',
-                'medicines.dosage',
-                'medicines.unit',
-            ])
-            ->whereNull('medicines.archived_at')
             ->where('branches.status', 'active')
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('medicines.status')
@@ -220,9 +211,6 @@ class MedicineController extends Controller
                 'medicines.medicine_name',
                 'medicines.generic_name',
                 'medicines.category',
-                'medicines.pricing_type',
-                'inventories.cost_price',
-                'medicines.markup_percent',
                 'medicines.price',
                 'medicines.reorder_level',
                 'inventories.stocks',
@@ -232,9 +220,6 @@ class MedicineController extends Controller
                 'inventories.pcs_per_container',
                 'medicines.dosage',
                 'medicines.unit',
-                'medicines.units_per_box',
-                DB::raw('FLOOR(inventories.stocks / GREATEST(medicines.units_per_box, 1)) as box_count'),
-                DB::raw('MOD(inventories.stocks, GREATEST(medicines.units_per_box, 1)) as loose_units'),
                 'medicines.type',
                 'medicines.is_dangerous',
                 'medicines.needs_protection',
@@ -432,43 +417,21 @@ class MedicineController extends Controller
                 'dosage' => $data['dosage'],
                 'unit' => $data['unit'],
                 'type' => $data['type'],
-            ], [
-                'category' => $data['category'],
-                'pricing_type' => $data['pricing_type'],
-                'cost_price' => $data['cost_price'],
-                'markup_percent' => $data['markup_percent'],
-                'price' => $data['price'],
-                'reorder_level' => $data['reorder_level'],
-                'stocks' => 0,
-                'units_per_box' => $data['units_per_box'],
                 'is_dangerous' => (bool) $data['is_dangerous'],
                 'needs_protection' => (bool) $data['needs_protection'],
                 'status' => 'active',
             ]);
 
-            $medicine->update([
-                'category' => $data['category'], 'pricing_type' => $data['pricing_type'],
-                'cost_price' => $data['cost_price'], 'markup_percent' => $data['markup_percent'],
-                'price' => $data['price'],
-                'reorder_level' => $data['reorder_level'], 'units_per_box' => $data['units_per_box'],
-                'is_dangerous' => (bool) $data['is_dangerous'],
-                'needs_protection' => (bool) $data['needs_protection'], 'archived_at' => null,
+            $batch = Batch::create([
+                'batch_number' => $data['batch_number'],
+                'expiry_date' => $data['expiry_date'],
+                'received_date' => $data['received_date'],
+                'mfg_date' => $data['mfg_date'],
+                'location' => $data['location'],
+                'status' => 'active',
             ]);
 
-            if (!$batch) {
-                $batch = Batch::create([
-                    'batch_number' => $batchNumber,
-                    'expiry_date' => $data['expiry_date'],
-                    'received_date' => $data['received_date'],
-                    'mfg_date' => $data['mfg_date'],
-                    'location' => $data['location'],
-                    'status' => 'active',
-                ]);
-            } elseif (Inventory::where('batch_id', $batch->batch_id)->where('medicine_id', '!=', $medicine->medicine_id)->exists()) {
-                throw new \RuntimeException('That batch number is already assigned to a different medicine.', 422);
-            }
-
-            $inventory = Inventory::query()->firstOrNew([
+            $inventory = Inventory::create([
                 'branch_id' => $data['branch_id'],
                 'medicine_id' => $medicine->medicine_id,
                 'batch_id' => $batch->batch_id,
@@ -487,7 +450,7 @@ class MedicineController extends Controller
                 'success' => true,
                 'message' => 'Medicine, batch, and inventory saved',
                 'data' => compact('medicine', 'batch', 'inventory'),
-            ], $previousStock > 0 ? 200 : 201);
+            ]);
         } catch (\Throwable $e) {
             DB::rollBack();
 
@@ -495,20 +458,12 @@ class MedicineController extends Controller
                 'success' => false,
                 'message' => 'Transaction failed',
                 'error' => $e->getMessage(),
-            ], $e->getCode() === 422 ? 422 : 500);
+            ], 500);
         }
     }
 
     public function show(string $id)
     {
-        $medicine = Medicine::findOrFail($id);
-        $batches = Inventory::query()
-            ->with(['batch.histories', 'branch:branch_id,branch_name'])
-            ->where('medicine_id', $id)
-            ->orderBy('batch_id')
-            ->get();
-
-        return response()->json(['success' => true, 'data' => ['medicine' => $medicine, 'batches' => $batches]]);
     }
 
     public function archived(Request $request)
@@ -596,14 +551,10 @@ class MedicineController extends Controller
                 'medicine_name' => $data['medicine_name'],
                 'generic_name' => $data['generic_name'],
                 'category' => $data['category'],
-                'pricing_type' => $data['pricing_type'],
-                'cost_price' => $data['cost_price'],
-                'markup_percent' => $data['markup_percent'],
                 'price' => $data['price'],
                 'reorder_level' => $data['reorder_level'],
                 'dosage' => $data['dosage'],
                 'unit' => $data['unit'],
-                'units_per_box' => $data['units_per_box'],
                 'type' => $data['type'],
                 'needs_protection' => filter_var($data['needs_protection'], FILTER_VALIDATE_BOOLEAN),
                 'is_dangerous' => filter_var($data['is_dangerous'], FILTER_VALIDATE_BOOLEAN),
@@ -621,13 +572,6 @@ class MedicineController extends Controller
             ]);
 
             $batch = Batch::where('batch_id', $inventory->batch_id)->lockForUpdate()->firstOrFail();
-            $duplicateBatch = Batch::query()
-                ->where('batch_number', $data['batch_number'])
-                ->where('batch_id', '!=', $batch->batch_id)
-                ->first();
-            if ($duplicateBatch) {
-                throw new \RuntimeException('That batch number already exists.', 422);
-            }
             $batch->update([
                 'batch_number' => $data['batch_number'],
                 'expiry_date' => $data['expiry_date'],
@@ -643,13 +587,6 @@ class MedicineController extends Controller
 
             $this->syncMedicineStocks($medicine->medicine_id);
 
-            BatchHistory::create([
-                'batch_id' => $batch->batch_id, 'medicine_id' => $medicine->medicine_id,
-                'inventory_id' => $inventory->inventory_id, 'branch_id' => $inventory->branch_id,
-                'user_id' => auth()->id(), 'action' => 'batch_updated', 'quantity_change' => 0,
-                'stock_after' => (int) $inventory->stocks, 'notes' => 'Medicine or batch details updated.',
-            ]);
-
             DB::commit();
 
             return response()->json([
@@ -664,7 +601,7 @@ class MedicineController extends Controller
                 'success' => false,
                 'message' => 'Update failed',
                 'error' => $e->getMessage(),
-            ], $e->getCode() === 422 ? 422 : 500);
+            ], 500);
         }
     }
 

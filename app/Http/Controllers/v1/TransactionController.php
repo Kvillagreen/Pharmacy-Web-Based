@@ -5,7 +5,6 @@ namespace App\Http\Controllers\v1;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\v1\MethodTransactionRequest;
 use App\Models\v1\Batch;
-use App\Models\v1\BatchHistory;
 use App\Models\v1\Inventory;
 use App\Models\v1\Medicine;
 use App\Models\v1\RegulatedCustomer;
@@ -19,9 +18,6 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\RateLimiter;
-use Illuminate\Support\Str;
 
 class TransactionController extends Controller
 {
@@ -43,7 +39,6 @@ class TransactionController extends Controller
             ->with([
                 'branch:branch_id,branch_name,company_id,status',
                 'user:user_id,first_name,last_name',
-                'items:transaction_item_id,transaction_id,batch_number,batch_id',
             ])
             ->whereHas('branch', function ($branchQuery) use ($companyId, $branchId) {
                 $branchQuery->where('status', 'active')
@@ -143,9 +138,6 @@ class TransactionController extends Controller
 
     public function index(Request $request)
     {
-        if ($request->user()?->role === 'super_admin') {
-            return response()->json(['success' => false, 'message' => 'Super administrator accounts cannot access the POS.'], 403);
-        }
         $site = strtolower($request->header('X-Page-Context', ''));
         $companyId = (int) $request->input('company_id', 0);
         $branchId = (int) $request->input('branch_id', 0);
@@ -170,7 +162,6 @@ class TransactionController extends Controller
                 'inventories.stocks',
                 'medicines.dosage',
                 'medicines.unit',
-                'medicines.units_per_box',
                 'medicines.type',
                 'medicines.is_dangerous',
                 'medicines.needs_protection',
@@ -310,9 +301,6 @@ class TransactionController extends Controller
 
     public function store(MethodTransactionRequest $request)
     {
-        if ($request->user()?->role === 'super_admin') {
-            return response()->json(['success' => false, 'message' => 'Super administrator accounts cannot process POS sales.'], 403);
-        }
         DB::beginTransaction();
         $lock = null;
         $pendingDocumentUploads = [];
@@ -357,7 +345,6 @@ class TransactionController extends Controller
                     'inventories.stocks',
                     'medicines.medicine_name',
                     'medicines.price',
-                    'inventories.cost_price',
                     'medicines.is_dangerous',
                     'medicines.needs_protection',
                     'batches.batch_number',
@@ -410,25 +397,9 @@ class TransactionController extends Controller
             ]);
 
             $transactionItems = [];
-            foreach (collect($data['items']) as $requestedItem) {
-                $medicineId = (int) $requestedItem['medicine_id'];
-                $quantity = (int) $requestedItem['quantity'];
+            foreach ($requestedQuantities as $medicineId => $quantity) {
                 $remainingToDeduct = (int) $quantity;
                 $inventoryBatches = $inventoryRows->get($medicineId, collect());
-
-                if (!empty($requestedItem['inventory_id'])) {
-                    $inventoryBatches = $inventoryBatches
-                        ->where('inventory_id', (int) $requestedItem['inventory_id'])
-                        ->values();
-                } elseif (!empty($requestedItem['batch_id'])) {
-                    $inventoryBatches = $inventoryBatches
-                        ->where('batch_id', (int) $requestedItem['batch_id'])
-                        ->values();
-                }
-
-                if ($inventoryBatches->isEmpty()) {
-                    throw new \RuntimeException('The selected medicine batch is not available in this branch.');
-                }
 
                 foreach ($inventoryBatches as $inventoryBatch) {
                     if ($remainingToDeduct <= 0) {
@@ -451,7 +422,6 @@ class TransactionController extends Controller
                         'mfg_date' => $inventoryBatch->mfg_date,
                         'quantity' => $deductedStocks,
                         'price' => $inventoryBatch->price,
-                        'cost_price' => $inventoryBatch->cost_price,
                         'created_at' => now(),
                         'updated_at' => now(),
                     ];
@@ -460,28 +430,12 @@ class TransactionController extends Controller
                         ->where('inventory_id', $inventoryBatch->inventory_id)
                         ->update(['stocks' => $newStocks]);
 
-                    BatchHistory::create([
-                        'batch_id' => $inventoryBatch->batch_id,
-                        'medicine_id' => (int) $medicineId,
-                        'inventory_id' => $inventoryBatch->inventory_id,
-                        'branch_id' => $inventoryBatch->branch_id,
-                        'user_id' => $data['user_id'],
-                        'action' => 'dispensed',
-                        'quantity_change' => -$deductedStocks,
-                        'stock_after' => $newStocks,
-                        'notes' => 'Stock deducted for transaction #' . $transaction->transaction_id,
-                    ]);
-
-                    if ($availableStocks > 0 && $newStocks === 0) {
-                        $this->notifyMainBranchOfStockout($inventoryBatch, $transaction->transaction_id);
-                    }
-
                     $inventoryBatch->stocks = $newStocks;
                     $remainingToDeduct -= $deductedStocks;
                 }
 
                 if ($remainingToDeduct > 0) {
-                    throw new \RuntimeException('The selected batch does not have enough stock to complete the sale.');
+                    throw new \RuntimeException('Unable to complete FEFO stock deduction for one or more medicines.');
                 }
 
                 $this->syncMedicineStocks((int) $medicineId);
@@ -543,8 +497,6 @@ class TransactionController extends Controller
                 'branch:branch_id,branch_name,branch_address,branch_contact',
                 'user:user_id,first_name,last_name',
                 'regulatedCustomer',
-                'voidedBy:user_id,first_name,last_name',
-                'voidAuthorizedBy:user_id,first_name,last_name',
             ])
             ->findOrFail($id);
 
@@ -562,172 +514,8 @@ class TransactionController extends Controller
     {
     }
 
-    public function destroy(Request $request, string $id)
+    public function destroy(string $id)
     {
-        $validated = $request->validate([
-            'manager_email' => ['required', 'email', 'max:255'],
-            'manager_pin' => ['required', 'string', 'regex:/^\d{4,8}$/'],
-            'void_reason' => ['required', 'string', 'max:500'],
-            'supervisor_note' => ['nullable', 'string', 'max:1000'],
-        ], [
-            'manager_pin.regex' => 'Manager PIN must contain 4 to 8 digits.',
-        ]);
-
-        $cashier = $request->user()?->load('branch');
-        $transaction = Transaction::with(['items', 'branch'])->findOrFail($id);
-
-        if ($transaction->status === 'voided') {
-            return response()->json([
-                'success' => false,
-                'message' => 'Transaction is already voided.',
-            ], 409);
-        }
-
-        if (!$cashier || !$this->userCanAccessTransactionBranch($cashier, $transaction)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'You are not allowed to void transactions for this branch.',
-            ], 403);
-        }
-
-        $authorizationKey = 'transaction-void|' . Str::lower($validated['manager_email']) . '|' . $request->ip();
-        if (RateLimiter::tooManyAttempts($authorizationKey, 5)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Too many invalid manager PIN attempts. Try again in one minute.',
-            ], 429);
-        }
-
-        $manager = User::with('branch')
-            ->where('email', $validated['manager_email'])
-            ->where('status', 'approved')
-            ->first();
-
-        $managerIsAuthorized = $manager
-            && in_array($manager->role, ['branch_manager', 'owner', 'admin'], true)
-            && $manager->manager_pin_hash
-            && Hash::check($validated['manager_pin'], $manager->manager_pin_hash)
-            && $this->managerCanAuthorizeBranch($manager, $transaction);
-
-        if (!$managerIsAuthorized) {
-            RateLimiter::hit($authorizationKey, 60);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Manager authorization failed. Check the manager email, PIN, role, and branch assignment.',
-            ], 422);
-        }
-
-        RateLimiter::clear($authorizationKey);
-
-        try {
-            $voidedTransaction = DB::transaction(function () use ($id, $validated, $cashier, $manager, $request) {
-                $lockedTransaction = Transaction::with('items')->lockForUpdate()->findOrFail($id);
-
-                if ($lockedTransaction->status === 'voided') {
-                    throw new \RuntimeException('Transaction is already voided.', 409);
-                }
-
-                foreach ($lockedTransaction->items as $item) {
-                    $inventory = Inventory::query()
-                        ->where('medicine_id', $item->medicine_id)
-                        ->where('batch_id', $item->batch_id)
-                        ->where('branch_id', $lockedTransaction->branch_id)
-                        ->lockForUpdate()
-                        ->first();
-
-                    if ($inventory) {
-                        $inventory->increment('stocks', $item->quantity);
-                        $inventory->refresh();
-                    } else {
-                        Inventory::create([
-                            'medicine_id' => $item->medicine_id,
-                            'batch_id' => $item->batch_id,
-                            'branch_id' => $lockedTransaction->branch_id,
-                            'stocks' => $item->quantity,
-                        ]);
-                    }
-
-                    BatchHistory::create([
-                        'batch_id' => $item->batch_id, 'medicine_id' => $item->medicine_id,
-                        'inventory_id' => $inventory->inventory_id, 'branch_id' => $lockedTransaction->branch_id,
-                        'user_id' => $cashier->user_id, 'action' => 'void_restocked',
-                        'quantity_change' => (int) $item->quantity, 'stock_after' => (int) $inventory->stocks,
-                        'notes' => 'Stock restored by voiding transaction #' . $lockedTransaction->transaction_id,
-                    ]);
-
-                    $this->syncMedicineStocks($item->medicine_id);
-                }
-
-                $lockedTransaction->update([
-                    'status' => 'voided',
-                    'void_reason' => $validated['void_reason'],
-                    'void_supervisor_note' => $validated['supervisor_note'] ?? null,
-                    'voided_at' => now(),
-                    'voided_by_user_id' => $cashier->user_id,
-                    'void_authorized_by_user_id' => $manager->user_id,
-                ]);
-
-                SystemAuditLog::create([
-                    'user_id' => $cashier->user_id,
-                    'action' => 'transaction_voided',
-                    'ip_address' => $request->ip(),
-                    'details' => json_encode([
-                        'transaction_id' => $lockedTransaction->transaction_id,
-                        'branch_id' => $lockedTransaction->branch_id,
-                        'amount' => (float) $lockedTransaction->total_amount,
-                        'reason' => $validated['void_reason'],
-                        'supervisor_note' => $validated['supervisor_note'] ?? null,
-                        'authorized_by_user_id' => $manager->user_id,
-                    ], JSON_UNESCAPED_SLASHES),
-                ]);
-
-                return $lockedTransaction->fresh([
-                    'items.medicine',
-                    'items.batch:batch_id,batch_number,expiry_date,mfg_date',
-                    'branch:branch_id,branch_name,branch_address,branch_contact',
-                    'user:user_id,first_name,last_name',
-                    'voidedBy:user_id,first_name,last_name',
-                    'voidAuthorizedBy:user_id,first_name,last_name',
-                ]);
-            }, 3);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Transaction voided with manager authorization.',
-                'data' => $voidedTransaction,
-            ]);
-        } catch (\Throwable $e) {
-            report($e);
-
-            return response()->json([
-                'success' => false,
-                'message' => $e->getCode() === 409
-                    ? 'Transaction is already voided.'
-                    : 'The transaction could not be voided. No stock changes were committed.',
-            ], $e->getCode() === 409 ? 409 : 500);
-        }
-    }
-
-    private function userCanAccessTransactionBranch(User $user, Transaction $transaction): bool
-    {
-        if ((int) $user->branch_id === (int) $transaction->branch_id) {
-            return true;
-        }
-
-        return in_array($user->role, ['owner', 'admin'], true)
-            && $user->branch?->company_id
-            && (int) $user->branch->company_id === (int) $transaction->branch?->company_id;
-    }
-
-    private function managerCanAuthorizeBranch(User $manager, Transaction $transaction): bool
-    {
-        if ($manager->role === 'branch_manager') {
-            return (int) $manager->branch_id === (int) $transaction->branch_id;
-        }
-
-        return $manager->branch?->company_id
-            && (int) $manager->branch->company_id === (int) $transaction->branch?->company_id;
     }
 
     public function void(Request $request, string $id)
@@ -821,36 +609,6 @@ class TransactionController extends Controller
         Medicine::query()
             ->where('medicine_id', $medicineId)
             ->update(['stocks' => $totalStocks]);
-    }
-
-    private function notifyMainBranchOfStockout(object $inventoryBatch, int $transactionId): void
-    {
-        $sourceBranch = \App\Models\v1\Branch::find($inventoryBatch->branch_id);
-        if (!$sourceBranch?->company_id) {
-            return;
-        }
-
-        $recipients = User::query()
-            ->where('status', 'approved')
-            ->whereIn('role', ['owner', 'admin'])
-            ->whereHas('branch', fn ($query) => $query->where('company_id', $sourceBranch->company_id))
-            ->get(['user_id']);
-
-        foreach ($recipients as $recipient) {
-            UserNotification::create([
-                'user_id' => $recipient->user_id,
-                'branch_id' => $sourceBranch->branch_id,
-                'type' => 'branch_stockout',
-                'title' => 'Branch stock-out alert',
-                'message' => ($inventoryBatch->medicine_name ?? 'Medicine') . ' is out of stock at ' . $sourceBranch->branch_name . '.',
-                'meta' => [
-                    'medicine_id' => (int) $inventoryBatch->medicine_id,
-                    'batch_id' => (int) $inventoryBatch->batch_id,
-                    'transaction_id' => $transactionId,
-                    'source_branch_id' => (int) $sourceBranch->branch_id,
-                ],
-            ]);
-        }
     }
 
     private function createTransactionNotifications(Transaction $transaction): void
