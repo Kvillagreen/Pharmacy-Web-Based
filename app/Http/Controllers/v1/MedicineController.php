@@ -144,34 +144,30 @@ class MedicineController extends Controller
             });
         }
 
-        $catalog = \App\Services\v1\MedicineDisplay::paginate(
-            $query,
-            $request,
-            $perPage,
-            true,
-            function (array $item) use ($stockFilter): bool {
-                $stocks = (int) ($item['stocks'] ?? 0);
-                $reorderLevel = (int) ($item['reorder_level'] ?? 0);
+        if ($stockFilter === 'in-stock') {
+            $query->where('inventories.stocks', '>', 0);
+        } elseif ($stockFilter === 'low-stock') {
+            $query->whereColumn('inventories.stocks', '<=', 'medicines.reorder_level')
+                ->where('inventories.stocks', '>', 0);
+        } elseif ($stockFilter === 'out-of-stock') {
+            $query->where('inventories.stocks', '<=', 0);
+        }
 
-                return match ($stockFilter) {
-                    'in-stock' => $stocks > 0,
-                    'low-stock' => $stocks > 0 && $stocks <= $reorderLevel,
-                    'out-of-stock' => $stocks <= 0,
-                    default => true,
-                };
-            },
-            function ($groups) use ($sort) {
-                return match ($sort) {
-                    'stocks' => $groups->sortByDesc(fn (array $item) => (int) ($item['stocks'] ?? 0)),
-                    'price' => $groups->sortBy(fn (array $item) => (float) ($item['price'] ?? 0)),
-                    'branch' => $groups->sortBy(fn (array $item) => strtolower((string) ($item['branch_name'] ?? ''))),
-                    default => $groups->sortBy(fn (array $item) => strtolower((string) ($item['medicine_name'] ?? ''))),
-                };
-            }
-        );
+        if ($sort === 'stocks') {
+            $query->orderByDesc('inventories.stocks')->orderBy('medicines.medicine_name');
+        } elseif ($sort === 'price') {
+            $query->orderBy('medicines.price')->orderBy('medicines.medicine_name');
+        } elseif ($sort === 'branch') {
+            $query->orderBy('branches.branch_name')->orderBy('medicines.medicine_name');
+        } else {
+            $query->orderBy('medicines.medicine_name')->orderBy('branches.branch_name');
+        }
+
+        $catalog = $query->paginate($perPage);
 
         return response()->json([
             'success' => true,
+            'message' => 'Public medicine catalog fetched successfully',
             'data' => $catalog->items(),
             'meta' => [
                 'current_page' => $catalog->currentPage(),
@@ -278,9 +274,7 @@ class MedicineController extends Controller
             ]);
         }
 
-        $paginated = $request->boolean('group_display')
-            ? \App\Services\v1\MedicineDisplay::paginate($query, $request, $perPage)
-            : $query->paginate($perPage);
+        $paginated = $query->paginate($perPage);
 
         $inventorySummary = Inventory::query()
             ->join('branches', 'branches.branch_id', '=', 'inventories.branch_id')
@@ -372,6 +366,10 @@ class MedicineController extends Controller
         try {
             $data = $request->validated();
 
+            $data['batch_number'] = $data['batch_number'] ?? $this->generateBatchNumber();
+            $data['markup_percent'] = $data['pricing_type'] === 'generic' ? 50 : 10;
+            $data['price'] = round((float) $data['cost_price'] * (1 + ((float) $data['markup_percent'] / 100)), 2);
+
             if (!empty($data['request_token']) && Cache::has($data['request_token'])) {
                 return response()->json([
                     'success' => false,
@@ -411,6 +409,9 @@ class MedicineController extends Controller
                 'medicine_name' => $data['medicine_name'],
                 'generic_name' => $data['generic_name'],
                 'category' => $data['category'],
+                'pricing_type' => $data['pricing_type'],
+                'cost_price' => $data['cost_price'],
+                'markup_percent' => $data['markup_percent'],
                 'price' => $data['price'],
                 'reorder_level' => $data['reorder_level'],
                 'stocks' => $stocks,
@@ -450,7 +451,7 @@ class MedicineController extends Controller
                 'success' => true,
                 'message' => 'Medicine, batch, and inventory saved',
                 'data' => compact('medicine', 'batch', 'inventory'),
-            ]);
+            ], 201);
         } catch (\Throwable $e) {
             DB::rollBack();
 
@@ -537,6 +538,9 @@ class MedicineController extends Controller
         try {
             $data = $request->validated();
 
+            $data['markup_percent'] = $data['pricing_type'] === 'generic' ? 50 : 10;
+            $data['price'] = round((float) $data['cost_price'] * (1 + ((float) $data['markup_percent'] / 100)), 2);
+
             $medicine = Medicine::where('medicine_id', $id)->firstOrFail();
             $inventoryId = (int) ($data['inventory_id'] ?? $request->input('inventory_id', 0));
 
@@ -551,6 +555,9 @@ class MedicineController extends Controller
                 'medicine_name' => $data['medicine_name'],
                 'generic_name' => $data['generic_name'],
                 'category' => $data['category'],
+                'pricing_type' => $data['pricing_type'],
+                'cost_price' => $data['cost_price'],
+                'markup_percent' => $data['markup_percent'],
                 'price' => $data['price'],
                 'reorder_level' => $data['reorder_level'],
                 'dosage' => $data['dosage'],
@@ -656,7 +663,7 @@ class MedicineController extends Controller
     {
         $containerType = strtolower(trim((string) ($data['container_type'] ?? 'none')));
         $containerCount = (int) ($data['container_count'] ?? 0);
-        $pcsPerContainer = (int) ($data['pcs_per_container'] ?? 0);
+        $pcsPerContainer = (int) ($data['units_per_box'] ?? $data['pcs_per_container'] ?? 0);
 
         if (in_array($containerType, ['boxes', 'bulk', 'custom'], true) && $containerCount > 0 && $pcsPerContainer > 0) {
             return $containerCount * $pcsPerContainer;
@@ -678,8 +685,17 @@ class MedicineController extends Controller
                 ? (trim((string) ($data['container_name'] ?? '')) ?: null)
                 : ($containerType === 'boxes' ? 'Boxes' : ($containerType === 'bulk' ? 'Bulk' : null)),
             'container_count' => $containerType === 'none' ? null : (int) ($data['container_count'] ?? 0),
-            'pcs_per_container' => $containerType === 'none' ? null : (int) ($data['pcs_per_container'] ?? 0),
+            'pcs_per_container' => $containerType === 'none' ? null : (int) ($data['units_per_box'] ?? $data['pcs_per_container'] ?? 0),
         ];
+    }
+
+    private function generateBatchNumber(): string
+    {
+        do {
+            $batchNumber = 'BAT-' . now()->format('ymd') . '-' . strtoupper(str()->random(6));
+        } while (Batch::query()->where('batch_number', $batchNumber)->exists());
+
+        return $batchNumber;
     }
 
     private function findMatchingInventory(array $data): ?Inventory

@@ -108,8 +108,6 @@ class DashboardController extends Controller
             $aggregateEnd = $rangeEnd->greaterThan($lastMonthEnd) ? $rangeEnd : $lastMonthEnd;
 
             $transactionSummary = Transaction::query()
-
-                ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
                 ->whereIn('branch_id', $scopeBranchIds)
                 ->whereBetween('created_at', [$aggregateStart, $aggregateEnd])
                 ->selectRaw(
@@ -179,8 +177,6 @@ class DashboardController extends Controller
             $expiredCount = (int) ($batchSummary->expired_count ?? 0);
 
             $dailyRevenueRaw = Transaction::query()
-
-                ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
                 ->selectRaw('DATE(created_at) as sale_date, SUM(total_amount) as total_revenue, COUNT(*) as transaction_count')
                 ->whereIn('branch_id', $scopeBranchIds)
                 ->whereBetween('created_at', [$rangeStart, $rangeEnd])
@@ -197,8 +193,6 @@ class DashboardController extends Controller
             ])->values();
 
             $paymentMix = Transaction::query()
-
-                ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
                 ->selectRaw('payment_method, SUM(total_amount) as total_revenue, COUNT(*) as transaction_count')
                 ->whereIn('branch_id', $scopeBranchIds)
                 ->whereBetween('created_at', [$rangeStart, $rangeEnd])
@@ -214,7 +208,6 @@ class DashboardController extends Controller
 
             $categoryMix = DB::table('transaction_items')
                 ->join('transactions', 'transaction_items.transaction_id', '=', 'transactions.transaction_id')
-            ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
                 ->join('medicines', 'transaction_items.medicine_id', '=', 'medicines.medicine_id')
                 ->selectRaw('medicines.category, SUM(transaction_items.quantity) as quantity_sold, COUNT(DISTINCT transactions.transaction_id) as transaction_count')
                 ->whereIn('transactions.branch_id', $scopeBranchIds)
@@ -232,7 +225,6 @@ class DashboardController extends Controller
 
             $topMedicines = DB::table('transaction_items')
                 ->join('transactions', 'transaction_items.transaction_id', '=', 'transactions.transaction_id')
-            ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
                 ->join('medicines', 'transaction_items.medicine_id', '=', 'medicines.medicine_id')
                 ->selectRaw('medicines.medicine_id, medicines.medicine_name, medicines.generic_name, medicines.category, medicines.price, SUM(transaction_items.quantity) as quantity_sold, COUNT(DISTINCT transactions.transaction_id) as transactions_count')
                 ->whereIn('transactions.branch_id', $scopeBranchIds)
@@ -274,7 +266,6 @@ class DashboardController extends Controller
             $branchComparison = Branch::query()
                 ->leftJoin('transactions', function ($join) use ($monthStart, $rangeEnd) {
                     $join->on('branches.branch_id', '=', 'transactions.branch_id')
-                    ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
                         ->whereBetween('transactions.created_at', [$monthStart, $rangeEnd]);
                 })
                 ->whereIn('branches.branch_id', $scopeBranchIds)

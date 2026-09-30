@@ -31,6 +31,8 @@ class MethodTransactionRequest extends FormRequest
         return [
             'user_id' => ['required', 'integer', 'exists:users,user_id'],
             'branch_id' => ['required', 'integer', 'exists:branches,branch_id'],
+            'sms_order_id' => ['nullable','integer','exists:sms_orders,sms_order_id'],
+            'pickup_confirmed' => ['exclude_without:sms_order_id','required','accepted'],
 
             'transaction_type' => ['required', Rule::in(['regular', 'controlled', 'dangerous', 'mixed'])],
             'total_amount' => ['required', 'numeric', 'min:0'],
@@ -42,19 +44,21 @@ class MethodTransactionRequest extends FormRequest
             'reference_number' => ['nullable', 'string', 'regex:/^\d{12}$/'],
 
             'discount' => ['required', 'numeric', 'min:0'],
-            'vat_amount' => ['nullable', 'numeric', 'min:0'],
             'discount_type' => ['nullable', Rule::in([
-                'SC',
-                'PWD',
+                'Discount',
                 'SCPWD',
+                'senior',
+                'pwd',
+                'Senior',
+                'PWD',
             ])],
-            'scpwd_id_number' => ['nullable', 'string', 'max:13', 'regex:/^(?:\d{12}|OSCA-\d{8})$/'],
+            'scpwd_id_number' => ['nullable', 'string', 'max:50'],
 
             'patient_name' => ['nullable', 'string', 'max:150'],
             'membership_id' => ['nullable', 'string', 'max:100'],
             'documents_submitted' => ['nullable', 'boolean'],
-            'prescription' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:20480'],
-            'member_id_image' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp,pdf', 'max:20480'],
+            'prescription' => ['nullable', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:5120'],
+            'member_id_image' => ['nullable', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:5120'],
             'patient_age' => ['nullable', 'integer', 'min:0', 'max:150'],
             'prescriber_name' => ['nullable', 'string', 'max:150'],
             'prescriber_prc_license_number' => ['nullable', 'string', 'regex:/^\d{7}$/'],
@@ -74,7 +78,7 @@ class MethodTransactionRequest extends FormRequest
             'customer_postal_code' => ['nullable', 'string', 'max:20'],
             'customer_country' => ['nullable', 'string', 'max:80'],
             'prescriber_clinic_address' => ['nullable', 'string', 'max:255'],
-            'prescriber_s2_license_number' => ['nullable', 'string', 'max:100'],
+            'prescriber_s2_license_number' => ['nullable', 'string', 'size:12', 'regex:/^\d{12}$/'],
             'prescriber_ptr_number' => ['nullable', 'string', 'size:16', 'regex:/^PTR-\d{4}-\d{7}$/'],
             'yellow_prescription_serial_number' => ['nullable', 'string', 'size:13', 'regex:/^YP\d{11}$/'],
             'dangerous_quantity_in_words' => ['nullable', 'string', 'max:150'],
@@ -83,10 +87,13 @@ class MethodTransactionRequest extends FormRequest
             'dangerous_treatment_duration' => ['nullable', 'string', 'max:150'],
             'receiver_name' => ['nullable', 'string', 'max:150'],
             'receiver_signature' => ['nullable', 'string', 'max:150'],
-            'request_token' => ['nullable', 'string', 'max:100'],
+            'receiver_signature_file' => ['nullable', 'image', 'mimes:png,jpg,jpeg', 'max:5120'],
+            'request_token' => ['required', 'string', 'max:100'],
 
             'items' => ['required', 'array', 'min:1'],
             'items.*.medicine_id' => ['required', 'integer', 'exists:medicines,medicine_id'],
+            'items.*.inventory_id' => ['nullable', 'integer', 'exists:inventories,inventory_id'],
+            'items.*.batch_id' => ['nullable', 'integer', 'exists:batches,batch_id'],
             'items.*.quantity' => ['required', 'integer', 'min:1'],
         ];
     }
@@ -104,6 +111,8 @@ class MethodTransactionRequest extends FormRequest
             'items.*.medicine_id.required' => 'Medicine ID is required for each item.',
             'items.*.quantity.required' => 'Quantity is required for each item.',
             'prescriber_prc_license_number.regex' => 'PRC license number must be a 7-digit code.',
+            'prescriber_s2_license_number.size' => 'S-2 license number must contain exactly 12 digits.',
+            'prescriber_s2_license_number.regex' => 'S-2 license number must contain exactly 12 digits.',
             'scpwd_id_number.regex' => 'SC/PWD ID must be a 12-digit PWD number or OSCA-########.',
             'prescriber_ptr_number.size' => 'PTR number must be exactly 16 characters.',
             'prescriber_ptr_number.regex' => 'PTR number must use PTR-YYYY-####### format.',
@@ -126,8 +135,8 @@ class MethodTransactionRequest extends FormRequest
                 $validator->errors()->add('reference_number', 'Reference number is only allowed for card or Gcash payments.');
             }
 
-            if (in_array($this->input('discount_type'), ['SC', 'PWD', 'SCPWD'], true) && !filled($this->input('scpwd_id_number'))) {
-                $validator->errors()->add('scpwd_id_number', 'Discount ID number is required for SC/PWD discounts.');
+            if (in_array($this->input('discount_type'), ['SCPWD', 'senior', 'pwd', 'Senior', 'PWD'], true) && !filled($this->input('scpwd_id_number'))) {
+                $validator->errors()->add('scpwd_id_number', 'SC/PWD ID number is required for SC/PWD discounts.');
             }
 
             $requirements = $this->regulatedRequirementsInPayload();
@@ -147,10 +156,6 @@ class MethodTransactionRequest extends FormRequest
             }
 
             if ($requirements['has_controlled']) {
-                if (!$this->hasFile('prescription')) {
-                    $validator->errors()->add('prescription', 'Prescription PDF or image is required for prescribed drug transactions.');
-                }
-
                 $controlledFields = [
                     'patient_age' => 'Patient age is required for prescribed drug transactions.',
                     'prescriber_name' => 'Prescriber full name is required for prescribed drug transactions.',
@@ -171,14 +176,6 @@ class MethodTransactionRequest extends FormRequest
             }
 
             if ($requirements['has_dangerous']) {
-                if (!$this->hasFile('prescription')) {
-                    $validator->errors()->add('prescription', 'Yellow prescription PDF or image is required for dangerous drug transactions.');
-                }
-
-                if (!$this->hasFile('member_id_image')) {
-                    $validator->errors()->add('member_id_image', 'Valid ID PDF or image is required for dangerous drug transactions.');
-                }
-
                 $dangerousFields = [
                     'prescriber_name' => 'Physician full name is required for dangerous drug transactions.',
                     'prescriber_clinic_address' => 'Clinic address is required for dangerous drug transactions.',
@@ -189,7 +186,6 @@ class MethodTransactionRequest extends FormRequest
                     'dangerous_quantity_in_figures' => 'Exact quantity in figures is required for dangerous drug transactions.',
                     'dangerous_total_dosage' => 'Total dosage is required for dangerous drug transactions.',
                     'dangerous_treatment_duration' => 'Treatment duration is required for dangerous drug transactions.',
-                    'receiver_signature' => 'Receiver signature is required for dangerous drug transactions.',
                 ];
 
                 foreach ($dangerousFields as $field => $message) {
@@ -271,8 +267,9 @@ protected function failedValidation(Validator $validator)
 {
     throw new HttpResponseException(response()->json([
         'success' => false,
-        'message' => $validator->errors()->first() // first error message
-    ]));
+        'message' => $validator->errors()->first(),
+        'errors' => $validator->errors(),
+    ], 422));
 }
 
 }

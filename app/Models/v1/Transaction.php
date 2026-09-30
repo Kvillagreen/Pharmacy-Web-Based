@@ -17,6 +17,8 @@ class Transaction extends Model
     protected $keyType = 'int';
 
     protected $fillable = [
+        'request_token',
+        'request_fingerprint',
         'user_id',
         'branch_id',
         'transaction_type',
@@ -52,6 +54,12 @@ class Transaction extends Model
         'customer_formatted_address',
         'regulated_classification',
         'regulated_details',
+        'status',
+        'void_reason',
+        'void_supervisor_note',
+        'voided_at',
+        'voided_by_user_id',
+        'void_authorized_by_user_id',
     ];
 
     protected $appends = [
@@ -82,6 +90,16 @@ class Transaction extends Model
     public function branch()
     {
         return $this->belongsTo(Branch::class, 'branch_id', 'branch_id');
+    }
+
+    public function voidedBy()
+    {
+        return $this->belongsTo(User::class, 'voided_by_user_id', 'user_id');
+    }
+
+    public function voidAuthorizedBy()
+    {
+        return $this->belongsTo(User::class, 'void_authorized_by_user_id', 'user_id');
     }
 
     public function regulatedCustomer()

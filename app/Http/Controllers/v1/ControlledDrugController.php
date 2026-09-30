@@ -70,7 +70,6 @@ class ControlledDrugController extends Controller
                             'total' => 0,
                         ],
                     ],
-                    'logbook' => ['data' => [], 'total' => 0],
                     'analysis' => [
                         'headline' => 'No controlled-drug inventory is available for the selected scope yet.',
                         'highlights' => [],
@@ -100,9 +99,6 @@ class ControlledDrugController extends Controller
                 medicines.is_dangerous,
                 medicines.needs_protection,
                 batches.batch_id,
-                batches.batch_number,
-                batches.mfg_date,
-                batches.status as batch_status,
                 batches.expiry_date,
                 batches.received_date,
                 batches.location,
@@ -180,8 +176,7 @@ class ControlledDrugController extends Controller
         $inventoryValue = (float) $scopedMedicines->sum(fn ($medicine) => (float) $medicine->price * (int) $medicine->stocks);
 
         $expiring30Count = (int) Batch::query()
-            ->whereHas('inventories', fn ($query) => $query->whereIn('branch_id', $scopeBranchIds)
-                ->whereHas('medicine', fn ($medicine) => $medicine->where('is_dangerous', true)->orWhere('needs_protection', true)))
+            ->whereHas('inventories', fn ($query) => $query->whereIn('branch_id', $scopeBranchIds))
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('status')
                     ->orWhereNotIn('status', ['archived', 'pulled_out', 'disposed', 'deleted']);
@@ -191,63 +186,13 @@ class ControlledDrugController extends Controller
             ->count();
 
         $expiredCount = (int) Batch::query()
-            ->whereHas('inventories', fn ($query) => $query->whereIn('branch_id', $scopeBranchIds)
-                ->whereHas('medicine', fn ($medicine) => $medicine->where('is_dangerous', true)->orWhere('needs_protection', true)))
+            ->whereHas('inventories', fn ($query) => $query->whereIn('branch_id', $scopeBranchIds))
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('status')
                     ->orWhereNotIn('status', ['archived', 'pulled_out', 'disposed', 'deleted']);
             })
             ->whereDate('expiry_date', '<', $today)
             ->count();
-
-        $logbook = Transaction::query()
-            ->with(['items.medicine', 'items.batch', 'user', 'branch', 'regulatedCustomer'])
-            ->whereIn('branch_id', $scopeBranchIds)
-            ->whereBetween('created_at', [$rangeStart, $rangeEnd])
-            ->whereHas('items.medicine', function ($query) {
-                $query->where('is_dangerous', true)->orWhere('needs_protection', true);
-            })
-            ->latest('created_at')
-            ->get()
-            ->flatMap(function ($transaction) use ($search) {
-                return $transaction->items->filter(function ($item) use ($search) {
-                    $medicine = $item->medicine;
-                    return $medicine && ($medicine->is_dangerous || $medicine->needs_protection)
-                        && ($search === '' || stripos(implode(' ', [$medicine->medicine_name, $medicine->generic_name, $medicine->category, $item->batch?->location]), $search) !== false);
-                })->map(function ($item) use ($transaction) {
-                    $medicine = $item->medicine;
-                    $customer = $transaction->regulatedCustomer;
-                    return [
-                        'transaction_item_id' => $item->transaction_item_id,
-                        'transaction_id' => $transaction->transaction_id,
-                        'reference_number' => $transaction->reference_number,
-                        'transaction_status' => $transaction->status ?? 'completed',
-                        'payment_method' => $transaction->payment_method,
-                        'dispensed_at' => $transaction->created_at,
-                        'regulated_customer_id' => $transaction->regulated_customer_id,
-                        'customer_name' => $transaction->patient_name ?: $customer?->full_name,
-                        'customer_contact_number' => $transaction->customer_contact_number ?: $customer?->contact_number,
-                        'customer_id_number' => $transaction->customer_id_number ?: $customer?->id_number,
-                        'customer_address' => $transaction->customer_formatted_address ?: $customer?->formatted_address,
-                        'branch_id' => $transaction->branch_id,
-                        'branch_name' => $transaction->branch?->branch_name,
-                        'dispenser_name' => trim(($transaction->user?->first_name ?? '') . ' ' . ($transaction->user?->last_name ?? '')),
-                        'medicine_id' => $item->medicine_id,
-                        'medicine_name' => $medicine->medicine_name,
-                        'generic_name' => $medicine->generic_name,
-                        'is_dangerous' => (bool) $medicine->is_dangerous,
-                        'needs_protection' => (bool) $medicine->needs_protection,
-                        'classification' => $medicine->is_dangerous ? 'Dangerous' : 'Protected',
-                        'quantity' => (int) $item->quantity,
-                        'price' => $item->price === null ? null : (float) $item->price,
-                        'line_total' => $item->price === null ? null : round($item->quantity * $item->price, 2),
-                        'batch_id' => $item->batch_id,
-                        'batch_number' => $item->batch_number ?? $item->batch?->batch_number,
-                        'expiry_date' => $item->expiry_date ?? $item->batch?->expiry_date,
-                        'mfg_date' => $item->mfg_date ?? $item->batch?->mfg_date,
-                    ];
-                });
-            })->values();
 
         $analysis = $this->buildAnalysis([
             'total_items' => (int) $scopedMedicines->count(),
@@ -258,6 +203,22 @@ class ControlledDrugController extends Controller
             'expiring_30_count' => $expiring30Count,
             'expired_count' => $expiredCount,
         ]);
+
+        $logbookQuery = Transaction::query()
+            ->with(['items' => fn ($q) => $q->whereHas('medicine', fn ($m) => $m->where('is_dangerous', true)->orWhere('needs_protection', true))->with('medicine'), 'regulatedCustomer', 'branch'])
+            ->whereIn('branch_id', $scopeBranchIds)
+            ->whereHas('items.medicine', fn ($q) => $q->where('is_dangerous', true)->orWhere('needs_protection', true))
+            ->when($request->filled('from_date'), fn ($q) => $q->whereDate('created_at', '>=', $request->input('from_date')))
+            ->when($request->filled('to_date'), fn ($q) => $q->whereDate('created_at', '<=', $request->input('to_date')))
+            ->when($search !== '', function ($q) use ($search) {
+                $q->where(function ($nested) use ($search) {
+                    $nested->where('patient_name', 'like', "%{$search}%")
+                        ->orWhereHas('items.medicine', fn ($m) => $m->where('medicine_name', 'like', "%{$search}%")->orWhere('generic_name', 'like', "%{$search}%"));
+                });
+            })->latest('transaction_id');
+        $logbook = filter_var($request->input('export', false), FILTER_VALIDATE_BOOLEAN)
+            ? ['data' => $logbookQuery->get(), 'meta' => ['total' => $logbookQuery->count()]]
+            : tap($logbookQuery->paginate($perPage), fn ($page) => null)->toArray();
 
         return response()->json([
             'success' => true,
@@ -288,7 +249,7 @@ class ControlledDrugController extends Controller
                         'total' => $paginatedInventory->total(),
                     ],
                 ],
-                'logbook' => ['data' => $logbook, 'total' => $logbook->count()],
+                'logbook' => $logbook,
                 'analysis' => $analysis,
             ],
         ]);

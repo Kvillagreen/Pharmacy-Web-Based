@@ -8,6 +8,7 @@ return new class extends Migration
 {
     public function up(): void
     {
+        Schema::dropIfExists('batch_histories');
         Schema::create('batch_histories', function (Blueprint $table) {
             $table->bigIncrements('batch_history_id');
             $table->unsignedBigInteger('batch_id');

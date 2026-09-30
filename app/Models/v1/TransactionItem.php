@@ -13,6 +13,7 @@ class TransactionItem extends Model
     protected $keyType = 'int';
 
     protected $fillable = [
+        'is_vat_exempt', 'cost_includes_vat', 'net_amount', 'output_vat',
         'medicine_id',
         'transaction_id',
         'batch_id',
@@ -21,6 +22,12 @@ class TransactionItem extends Model
         'mfg_date',
         'quantity',
         'price',
+        'cost_price',
+    ];
+
+    protected $casts = [
+        'price' => 'decimal:2',
+        'cost_price' => 'decimal:2',
     ];
     public function medicine()
     {

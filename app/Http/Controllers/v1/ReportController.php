@@ -4,6 +4,7 @@ namespace App\Http\Controllers\v1;
 
 use App\Http\Controllers\Controller;
 use App\Models\v1\Batch;
+use App\Models\v1\Bir2306Record;
 use App\Models\v1\Branch;
 use App\Models\v1\InventoryTransfer;
 use App\Models\v1\Medicine;
@@ -87,9 +88,6 @@ class ReportController extends Controller
                         'transaction_count' => 0,
                         'average_sale' => 0,
                         'total_discount' => 0,
-                        'cost_of_goods_sold' => null,
-                        'gross_profit' => null,
-                        'gross_margin_pct' => null,
                         'inventory_value' => 0,
                         'low_stock_count' => 0,
                         'expiring_30_count' => 0,
@@ -120,8 +118,6 @@ class ReportController extends Controller
         }
 
         $allTransactions = Transaction::query()
-
-            ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
             ->whereIn('branch_id', $scopeBranchIds);
 
         $transactionSummary = (clone $allTransactions)
@@ -239,7 +235,6 @@ class ReportController extends Controller
 
         $categoryMix = DB::table('transaction_items')
             ->join('transactions', 'transaction_items.transaction_id', '=', 'transactions.transaction_id')
-            ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
             ->join('medicines', 'transaction_items.medicine_id', '=', 'medicines.medicine_id')
             ->selectRaw('medicines.category, SUM(transaction_items.quantity) as quantity_sold, COUNT(DISTINCT transactions.transaction_id) as transaction_count')
             ->whereIn('transactions.branch_id', $scopeBranchIds)
@@ -258,7 +253,6 @@ class ReportController extends Controller
         $branchPerformance = Branch::query()
             ->leftJoin('transactions', function ($join) use ($rangeStart, $rangeEnd) {
                 $join->on('branches.branch_id', '=', 'transactions.branch_id')
-                    ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
                     ->whereBetween('transactions.created_at', [$rangeStart, $rangeEnd]);
             })
             ->where('branches.status', 'active')
@@ -286,7 +280,6 @@ class ReportController extends Controller
 
         $topMedicines = DB::table('transaction_items')
             ->join('transactions', 'transaction_items.transaction_id', '=', 'transactions.transaction_id')
-            ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
             ->join('medicines', 'transaction_items.medicine_id', '=', 'medicines.medicine_id')
             ->selectRaw('
                 medicines.medicine_id,
@@ -332,6 +325,7 @@ class ReportController extends Controller
                 inventories.created_at
             ')
             ->whereIn('inventories.branch_id', $scopeBranchIds)
+            ->whereBetween('inventories.created_at', [$rangeStart, $rangeEnd])
             ->where(function ($statusQuery) {
                 $statusQuery->whereNull('batches.status')
                     ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
@@ -392,7 +386,7 @@ class ReportController extends Controller
         ])->values();
 
         $recentTransactions = Transaction::query()
-            ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name', 'attachments', 'items'])
+            ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name', 'attachments'])
             ->whereIn('branch_id', $scopeBranchIds)
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
             ->latest('created_at')
@@ -400,13 +394,11 @@ class ReportController extends Controller
             ->get()
             ->map(fn ($transaction) => [
                 'transaction_id' => $transaction->transaction_id,
-                'status' => $transaction->status ?? 'completed',
                 'branch_name' => $transaction->branch?->branch_name,
                 'cashier_name' => trim(($transaction->user?->first_name ?? '') . ' ' . ($transaction->user?->last_name ?? '')),
                 'payment_method' => $transaction->payment_method,
                 'reference_number' => $transaction->reference_number,
                 'transaction_type' => $transaction->transaction_type,
-                'batch_numbers' => $transaction->items->pluck('batch_number')->filter()->unique()->values(),
                 'regulated_classification' => $transaction->regulated_classification,
                 'patient_name' => $transaction->patient_name,
                 'total_amount' => (float) $transaction->total_amount,
@@ -416,7 +408,7 @@ class ReportController extends Controller
             ->values();
 
         $prescribedTransactions = Transaction::query()
-            ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name', 'attachments', 'items'])
+            ->with(['user:user_id,first_name,last_name', 'branch:branch_id,branch_name', 'attachments'])
             ->whereIn('branch_id', $scopeBranchIds)
             ->whereIn('regulated_classification', ['controlled', 'mixed'])
             ->whereBetween('created_at', [$rangeStart, $rangeEnd])
@@ -500,10 +492,6 @@ class ReportController extends Controller
                     'transaction_count' => $transactionCount,
                     'average_sale' => round($averageSale, 2),
                     'total_discount' => round($totalDiscount, 2),
-                    // Purchase costs are not recorded, so profit cannot be calculated.
-                    'cost_of_goods_sold' => null,
-                    'gross_profit' => null,
-                    'gross_margin_pct' => null,
                     'inventory_value' => round($inventoryValue, 2),
                     'low_stock_count' => $lowStockCount,
                     'expiring_30_count' => $expiring30Count,
@@ -532,120 +520,84 @@ class ReportController extends Controller
 
     public function birAnnualDeclaration(Request $request)
     {
-        $validated = $request->validate([
+        $rules = [
             'company_id' => ['required', 'integer', 'exists:companies,company_id'],
             'branch_id' => ['required', 'integer', 'exists:branches,branch_id'],
-            'year' => ['required', 'integer', 'min:2000'],
-        ]);
-
-        $today = Carbon::today();
-        $selectedYear = (int) $validated['year'];
-        $currentYear = (int) $today->format('Y');
-
-        if ($selectedYear >= $currentYear) {
-            return response()->json([
-                'success' => false,
-                'message' => 'BIR 2306 summaries can only be generated for a completed taxable year.',
-            ], 422);
+            'year' => ['required', 'integer', 'min:2018', 'max:'.now()->year],
+            'quarter' => ['required', 'integer', 'between:1,3'],
+            'tax_method' => ['required', 'in:graduated_itemized,graduated_osd,eight_percent'],
+            'income_type' => ['required', 'in:business,mixed'],
+            'previous_income' => ['nullable', 'numeric', 'between:-999999999999,999999999999'],
+            'cost_of_sales_override' => ['nullable', 'numeric', 'min:0', 'max:999999999999'],
+        ];
+        foreach (['itemized_deductions', 'other_income', 'gpp_income', 'prior_year_credit', 'previous_payments', 'previous_withholding', 'current_withholding', 'amended_payment', 'foreign_credit', 'other_credits', 'surcharge', 'interest', 'compromise'] as $field) {
+            $rules[$field] = ['nullable', 'numeric', 'min:0', 'max:999999999999'];
         }
-
-        $branch = Branch::query()
-            ->with('company')
-            ->where('status', 'active')
-            ->where('company_id', $validated['company_id'])
-            ->where('branch_id', $validated['branch_id'])
-            ->first();
-
+        $data = $request->validate($rules);
+        $branch = Branch::with('company')->where('company_id', $data['company_id'])
+            ->where('status', 'active')->find($data['branch_id']);
         if (!$branch) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Selected branch is not available for the specified company.',
-            ], 422);
+            return response()->json(['success' => false, 'message' => 'Selected branch is not available for the specified company.'], 422);
         }
-
-        $yearStart = Carbon::create($selectedYear, 1, 1)->startOfDay();
-        $yearEnd = Carbon::create($selectedYear, 12, 31)->endOfDay();
-
-        $transactionSummary = Transaction::query()
-
-            ->where(fn ($q) => $q->whereNull('transactions.status')->orWhere('transactions.status', '<>', 'voided'))
-            ->where('branch_id', $branch->branch_id)
-            ->whereBetween('created_at', [$yearStart, $yearEnd])
-            ->selectRaw('
-                COALESCE(SUM(sub_total), 0) as gross_sales,
-                COALESCE(SUM(discount), 0) as sales_discounts,
-                COALESCE(SUM(total_amount), 0) as net_receipts,
-                COUNT(*) as transaction_count
-            ')
-            ->first();
-
-        $grossSales = round((float) ($transactionSummary->gross_sales ?? 0), 2);
-        $salesDiscounts = round((float) ($transactionSummary->sales_discounts ?? 0), 2);
-        $netSales = round(max($grossSales - $salesDiscounts, 0), 2);
-        $costOfSales = 0.00;
-        $grossIncome = round($netSales - $costOfSales, 2);
-        $deductions = 0.00;
-        $taxableNetIncome = round(max($grossIncome - $deductions, 0), 2);
-        $incomeTaxRate = 0.25;
-        $incomeTaxDue = round($taxableNetIncome * $incomeTaxRate, 2);
-        $basicTaxPayment = $incomeTaxDue;
-        $surcharge = 0.00;
-        $interest = 0.00;
-        $compromise = 0.00;
-        $totalAmountPayable = round($basicTaxPayment + $surcharge + $interest + $compromise, 2);
-        $returnPeriod = Carbon::create($selectedYear, 12, 31)->toDateString();
-        $dueDate = Carbon::create($selectedYear + 1, 4, 15)->toDateString();
-        $registeredAddress = trim((string) ($branch->branch_address ?? ''));
-        $telephoneNumber = trim((string) ($branch->branch_contact ?? ''));
-        $taxpayerName = trim(($branch->company?->company_name ?? 'Pharmacy') . ' - ' . $branch->branch_name . ' Branch');
-        $lineOfBusiness = 'Retail Pharmacy / Drugstore Operations';
-
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'form_no' => '2306',
-                'generated_at' => now(),
-                'branch_id' => $branch->branch_id,
-                'branch_name' => $branch->branch_name,
-                'company_id' => $branch->company?->company_id,
-                'taxpayer_name' => $taxpayerName,
-                'tin_number' => $branch->company?->tin_number,
-                'taxable_year' => $selectedYear,
-                'return_period' => $returnPeriod,
-                'due_date' => $dueDate,
-                'tax_type_code' => 'IT',
-                'tax_type_description' => 'Income Tax',
-                'atc' => 'MC 200',
-                'atc_description' => 'Others',
-                'manner_of_payment' => 'Voluntary Payment',
-                'type_of_payment' => 'Others - Income tax payment summary via BIR Form 2306',
-                'line_of_business' => $lineOfBusiness,
-                'registered_address' => $registeredAddress,
-                'telephone_number' => $telephoneNumber,
-                'basic_tax_payment' => $basicTaxPayment,
-                'surcharge' => $surcharge,
-                'interest' => $interest,
-                'compromise' => $compromise,
-                'total_amount_payable' => $totalAmountPayable,
-                'transaction_count' => (int) ($transactionSummary->transaction_count ?? 0),
-                'gross_sales_receipts' => $grossSales,
-                'sales_discounts' => $salesDiscounts,
-                'net_sales_receipts' => $netSales,
-                'cost_of_sales' => $costOfSales,
-                'gross_income' => $grossIncome,
-                'deductions' => $deductions,
-                'taxable_net_income' => $taxableNetIncome,
-                'income_tax_rate' => $incomeTaxRate,
-                'income_tax_due' => $incomeTaxDue,
-                'is_ready_to_file' => false,
-                'data_notes' => [
-                    'This output follows the BIR Form 2306 payment-form layout using the currently available sales and tax summary data in the system.',
-                    'ATC, tax type code, due date, and payment classification should still be validated against the actual liability being paid before filing.',
-                    'Basic tax payment is derived from the computed annual tax due in the current report, while surcharge, interest, and compromise are set to 0.00 unless manually assessed.',
-                    'Please reconcile this payment summary with your accountant and official BIR filing requirements before submission.',
-                ],
-            ],
-        ]);
+        $start = Carbon::create($data['year'], ($data['quarter'] - 1) * 3 + 1, 1)->startOfDay();
+        $end = $start->copy()->endOfQuarter();
+        if ($end->isFuture()) {
+            return response()->json(['success' => false, 'message' => 'Select a completed quarter.'], 422);
+        }
+        if ((int) $data['quarter'] === 1 && (float) ($data['previous_income'] ?? 0) !== 0.0) {
+            return response()->json(['success' => false, 'message' => 'Previous-quarter income must be zero for the first quarter.'], 422);
+        }
+        $salesQuery = Transaction::query()->where('branch_id', $branch->branch_id)
+            ->whereBetween('created_at', [$start, $end])->whereNull('voided_at')
+            ->where(fn ($q) => $q->whereNull('status')->orWhere('status', 'completed'));
+        $summary = (clone $salesQuery)->selectRaw('COALESCE(SUM(sub_total),0) gross_sales, COALESCE(SUM(discount),0) discounts, COALESCE(SUM(vat_amount),0) vat, COALESCE(SUM(total_amount),0) receipts, COUNT(*) transaction_count')->first();
+        $items = DB::table('transaction_items')->whereIn('transaction_id', (clone $salesQuery)->select('transaction_id'));
+        $cost = round((float) (clone $items)->selectRaw('COALESCE(SUM(quantity * cost_price),0) total')->value('total'), 2);
+        $missing = (clone $items)->whereNull('cost_price')->count();
+        $missingItems = (clone $salesQuery)->doesntHave('items')->count();
+        $netSales = round((float) $summary->receipts - (float) $summary->vat, 2);
+        $notes = [
+            'Branch worksheet based on the supplied BIR Form 1701Q (January 2018). This individual-income-tax form is not a corporate return. Consolidate all taxpayer income before filing.',
+            'Only completed, non-voided sales in the selected quarter are included. Net sales exclude recorded VAT. Historical unit costs are used without substituting current medicine prices.',
+            'Prior-quarter income, expenses, tax credits and assessed penalties are entered by the preparer; zero means none entered. VAT is not a withholding tax credit.',
+            'Form computation rows round to whole pesos as instructed by the template. Source transaction totals retain centavos.',
+            'Spouse information, aggregate spouse liability, payment evidence and taxpayer declarations require completion on the official return. This worksheet does not certify tax payment.',
+        ];
+        if ($missing || $missingItems) {
+            $notes[] = "$missing item(s) lack historical costs; $missingItems transaction(s) lack item details. Reconcile cost of sales before using itemized deductions.";
+        }
+        if (isset($data['cost_of_sales_override'])) {
+            $cost = (float) $data['cost_of_sales_override'];
+            $notes[] = 'Cost of sales uses the preparer-entered override rather than the incomplete recorded cost total.';
+        }
+        if ($data['tax_method'] === 'eight_percent') {
+            $cumulative = $netSales + (float) ($data['other_income'] ?? 0) + (float) ($data['previous_income'] ?? 0);
+            if ($cumulative > 3000000 || (float) $summary->vat > 0) {
+                return response()->json(['success' => false, 'message' => 'The 8% option requires eligible non-VAT income within the PHP 3,000,000 limit. Select graduated rates and reconcile prior-quarter income.'], 422);
+            }
+            $notes[] = 'The preparer must confirm eligibility and election of the 8% option across all taxpayer businesses.';
+        }
+        $calculation = app(\App\Services\v1\QuarterlyTaxSummary::class)->calculate($netSales, $cost, $data);
+        return response()->json(['success' => true, 'data' => array_merge([
+            'form_no' => '1701Q', 'generated_at' => now()->toIso8601String(),
+            'branch_id' => $branch->branch_id, 'branch_name' => $branch->branch_name,
+            'company_id' => $branch->company_id, 'taxpayer_name' => $branch->company?->company_name,
+            'tin_number' => $branch->company?->tin_number, 'taxable_year' => (int) $data['year'],
+            'quarter' => (int) $data['quarter'], 'period_start' => $start->toDateString(), 'return_period' => $end->toDateString(),
+            'tax_method' => $data['tax_method'], 'income_type' => $data['income_type'],
+            'atc' => $data['tax_method'] === 'eight_percent' ? ($data['income_type'] === 'mixed' ? 'II016' : 'II015') : ($data['income_type'] === 'mixed' ? 'II013' : 'II012'),
+            'registered_address' => $branch->branch_address, 'telephone_number' => $branch->branch_contact,
+            'transaction_count' => (int) $summary->transaction_count,
+            'gross_sales_receipts' => round((float) $summary->gross_sales, 2),
+            'sales_discounts' => round((float) $summary->discounts, 2),
+            'vat_amount' => round((float) $summary->vat, 2),
+            'net_receipts' => round((float) $summary->receipts, 2),
+            'net_sales_receipts' => $netSales, 'cost_of_sales' => $cost,
+            'missing_cost_count' => $missing, 'missing_item_transaction_count' => $missingItems,
+            'period_from' => $start->toDateString(), 'period_to' => $end->toDateString(),
+            'surcharge' => (float) ($data['surcharge'] ?? 0), 'interest' => (float) ($data['interest'] ?? 0), 'compromise' => (float) ($data['compromise'] ?? 0),
+            'inputs' => $data, 'is_ready_to_file' => false, 'data_notes' => $notes,
+        ], $calculation)]);
     }
 
     private function percentChange(float $current, float $previous): float
@@ -705,7 +657,6 @@ class ReportController extends Controller
     {
         return [
             'transaction_id' => $transaction->transaction_id,
-            'status' => $transaction->status ?? 'completed',
             'regulated_classification' => $transaction->regulated_classification,
             'branch_name' => $transaction->branch?->branch_name,
             'cashier_name' => trim(($transaction->user?->first_name ?? '') . ' ' . ($transaction->user?->last_name ?? '')),
@@ -730,5 +681,62 @@ class ReportController extends Controller
                 ->values(),
             'regulated_details' => $transaction->regulated_details,
         ];
+    }
+
+    public function storeBir2306(Request $request)
+    {
+        $data = $request->validate([
+            'company_id' => ['required','integer','exists:companies,company_id'],
+            'branch_id' => ['required','integer','exists:branches,branch_id'],
+            'period_from' => ['required','date'], 'period_to' => ['required','date','after_or_equal:period_from'],
+            'payor_tin' => ['required','string','max:30'], 'payor_registered_name' => ['required','string'],
+            'payor_registered_address' => ['required','string'], 'payor_zip_code' => ['required','string','max:10'],
+            'nature_of_income_payment' => ['required','string'], 'atc' => ['required','string','max:20'],
+            'source_reference' => ['required','string','max:255'],
+            'payor_signatory_name' => ['nullable','string'], 'payor_signatory_title' => ['nullable','string'],
+            'certificate_date' => ['nullable','date'],
+        ]);
+        $branchValid = Branch::whereKey($data['branch_id'])->where('company_id',$data['company_id'])->exists();
+        if (!$branchValid) return response()->json(['success'=>false,'message'=>'Branch does not belong to the selected company.'],422);
+        $summary = Transaction::where('branch_id',$data['branch_id'])->where('status','completed')->whereBetween('created_at',[Carbon::parse($data['period_from'])->startOfDay(),Carbon::parse($data['period_to'])->endOfDay()])->selectRaw('COALESCE(SUM(total_amount),0) amount_of_payment, COALESCE(SUM(vat_amount),0) tax_withheld')->first();
+        $record = Bir2306Record::create([...$data,'amount_of_payment'=>(float)$summary->amount_of_payment,'tax_withheld'=>(float)$summary->tax_withheld]);
+        return response()->json(['success'=>true,'message'=>'BIR 2306 source record stored successfully.','data'=>$record],201);
+    }
+
+    public function export(Request $request)
+    {
+        $format = strtolower((string) $request->validate(['format' => ['required','in:csv,pdf']])['format']);
+        $payload = $this->index($request)->getData(true)['data'];
+        $rows = $payload['tables']['recent_transactions'] ?? [];
+        if ($format === 'csv') {
+            $stream = fopen('php://temp', 'r+');
+            fputcsv($stream, ['Transaction ID','Branch','Cashier','Payment','Type','Amount','Discount','Date']);
+            foreach ($rows as $row) fputcsv($stream, [$row['transaction_id'],$row['branch_name'],$row['cashier_name'],$row['payment_method'],$row['transaction_type'],$row['total_amount'],$row['discount'],$row['created_at']]);
+            rewind($stream); $content = stream_get_contents($stream); fclose($stream);
+            return response($content, 200, ['Content-Type'=>'text/csv; charset=UTF-8','Content-Disposition'=>'attachment; filename="pharmacy-report.csv"']);
+        }
+        $lines = ['PHARMACY SALES REPORT','Scope: '.($payload['scope']['label'] ?? ''),'Revenue: '.number_format((float)($payload['summary']['total_revenue'] ?? 0),2),'Transactions: '.($payload['summary']['transaction_count'] ?? 0)];
+        foreach (array_slice($rows,0,35) as $row) $lines[] = '#'.$row['transaction_id'].' '.$row['branch_name'].' '.number_format((float)$row['total_amount'],2);
+        return response($this->simplePdf($lines),200,['Content-Type'=>'application/pdf','Content-Disposition'=>'attachment; filename="pharmacy-report.pdf"']);
+    }
+
+    private function simplePdf(array $lines): string
+    {
+        $escape = fn ($v) => str_replace(['\\','(',')'], ['\\\\','\\(','\\)'], (string)$v);
+        $text = "BT /F1 11 Tf 50 790 Td ";
+        foreach ($lines as $i => $line) $text .= ($i ? "0 -18 Td " : '') . '(' . $escape($line) . ") Tj ";
+        $text .= 'ET';
+        $objects = [
+            '<< /Type /Catalog /Pages 2 0 R >>',
+            '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+            '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+            '<< /Length '.strlen($text).' >> stream' . "\n" . $text . "\nendstream",
+            '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+        ];
+        $pdf = "%PDF-1.4\n"; $offsets=[0];
+        foreach ($objects as $i=>$object) { $offsets[] = strlen($pdf); $pdf .= ($i+1)." 0 obj\n{$object}\nendobj\n"; }
+        $xref=strlen($pdf); $pdf.="xref\n0 ".(count($objects)+1)."\n0000000000 65535 f \n";
+        for($i=1;$i<=count($objects);$i++) $pdf.=sprintf("%010d 00000 n \n",$offsets[$i]);
+        return $pdf."trailer << /Size ".(count($objects)+1)." /Root 1 0 R >>\nstartxref\n{$xref}\n%%EOF";
     }
 }

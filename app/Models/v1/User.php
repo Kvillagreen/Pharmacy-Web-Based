@@ -22,6 +22,7 @@ class User extends Authenticatable
         'last_name',
         'email',
         'password',
+        'manager_pin_hash',
         'address',
         'status',
         'role',
@@ -49,6 +50,7 @@ class User extends Authenticatable
     ];
     protected $hidden = [
         'password',
+        'manager_pin_hash',
         'remember_token',
     ];
 
@@ -78,9 +80,11 @@ class User extends Authenticatable
     // ✅ helper function
     public function hasPermission(string $permission): bool
     {
-        return $this->permissions()
-            ->where('permission_name', $permission)
-            ->exists();
+        return in_array($permission, $this->effectivePermissions(), true);
     }
 
+    public function effectivePermissions(): array
+    {
+        return \App\Services\v1\RoleAccess::permissions($this->role);
+    }
 }

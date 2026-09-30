@@ -1,0 +1,553 @@
+<?php
+
+namespace App\Http\Controllers\v1;
+
+use App\Models\v1\Permission;
+use App\Models\v1\User;
+use App\Models\v1\Branch;
+use App\Http\Controllers\Controller;
+use Illuminate\Http\Request;
+use App\Services\v1\UserQuery;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rule;
+
+class UserController extends Controller
+{
+    private const VIEW_ALL_USERS_PERMISSION = 'users_all_branches';
+    private ?\Illuminate\Support\Collection $permissionCatalog = null;
+
+    private function defaultRolePermissionNames(string $role): array
+    {
+        return \App\Services\v1\RoleAccess::permissions($role);
+    }
+
+    private function defaultRolePermissionIds(string $role): array
+    {
+        return Permission::query()
+            ->whereIn('permission_name', $this->defaultRolePermissionNames($role))
+            ->pluck('permission_id')
+            ->toArray();
+    }
+
+    private function formatUser(User $user): array
+    {
+        $this->permissionCatalog ??= Permission::query()->get();
+        return [
+            'user_id' => $user->user_id,
+            'first_name' => $user->first_name,
+            'last_name' => $user->last_name,
+            'email' => $user->email,
+            'status' => $user->status,
+            'role' => $user->role,
+            'branch_id' => $user->branch_id,
+            'branch_name' => $user->branch?->branch_name,
+            'branch_address' => $user->branch?->branch_address,
+            'address' => $user->address ?? null,
+            'created_at' => $user->created_at,
+            'updated_at' => $user->updated_at,
+            'deleted_at' => $user->deleted_at,
+            'login_at' => $user->login_at,
+            'branch' => $user->branch,
+            'company' => $user->branch?->company,
+            'permissions' => $this->permissionCatalog->whereIn('permission_name', $user->effectivePermissions())->values(),
+            'permission_names' => $user->effectivePermissions(),
+            'has_manager_pin' => !empty($user->manager_pin_hash),
+        ];
+    }
+
+    private function canViewUsersAcrossBranches(User $user): bool
+    {
+        return $user->hasPermission(self::VIEW_ALL_USERS_PERMISSION);
+    }
+
+    private function applyUserVisibilityScope(Request $request, $query, User $authUser)
+    {
+        $authCompanyId = (int) ($authUser->branch?->company_id ?? 0);
+        $requestedCompanyId = (int) $request->input('company_id', 0);
+
+        if ($authCompanyId > 0) {
+            $query->whereHas('branch', function ($branchQuery) use ($authCompanyId) {
+                $branchQuery->where('company_id', $authCompanyId);
+            });
+        } elseif ($requestedCompanyId > 0) {
+            $query->whereHas('branch', function ($branchQuery) use ($requestedCompanyId) {
+                $branchQuery->where('company_id', $requestedCompanyId);
+            });
+        }
+
+        if (!$this->canViewUsersAcrossBranches($authUser)) {
+            $query->where('branch_id', $authUser->branch_id);
+        }
+
+        return $query;
+    }
+
+    public function index(Request $request)
+    {
+        $authUser = User::with(['permissions', 'branch'])->find(auth()->id());
+
+        if (!$authUser) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized',
+            ], 401);
+        }
+
+        $perPage = (int) $request->input('per_page', 9);
+        $isExport = filter_var($request->input('export', false), FILTER_VALIDATE_BOOLEAN);
+
+        $query = User::with(['branch.company', 'permissions'])
+            ->whereIn('status', ['approved', 'pending', 'rejected']);
+
+        $query = $this->applyUserVisibilityScope($request, $query, $authUser);
+
+        if ($this->canViewUsersAcrossBranches($authUser) && $request->filled('company_id')) {
+            $query->whereHas('branch', function ($q) use ($request) {
+                $q->where('company_id', $request->company_id);
+            });
+        }
+
+        // Apply filters
+        if ($request->hasAny([
+            'search',
+            'sort',
+            'filter',
+            'user_id',
+            'first_name',
+            'last_name',
+            'status',
+            'role',
+            'branch_id'
+        ])) {
+            $filter = new UserQuery();
+            $query = $filter->apply($request, $query);
+        } else {
+            $query->orderBy('user_id', 'desc');
+        }
+
+        $queryOnly = User::with(['branch.company', 'permissions'])
+            ->whereIn('status', ['approved', 'pending', 'rejected']);
+
+        $queryOnly = $this->applyUserVisibilityScope($request, $queryOnly, $authUser);
+
+        if ($this->canViewUsersAcrossBranches($authUser) && $request->filled('company_id')) {
+            $queryOnly->whereHas('branch', function ($q) use ($request) {
+                $q->where('company_id', $request->company_id);
+            });
+        }
+
+        $totalUsers = (clone $queryOnly)->count();
+
+        $adminCount = (clone $queryOnly)
+            ->where('role', 'admin')
+            ->count();
+
+        $managerCount = (clone $queryOnly)
+            ->where('role', 'branch_manager')
+            ->count();
+
+        $activeCount = (clone $queryOnly)
+            ->where('status', 'approved')
+            ->count();
+
+        if ($isExport) {
+            $users = $query->get();
+            $formattedUsers = $users->map(fn($user) => $this->formatUser($user));
+
+            return response()->json([
+                'success' => true,
+                'data' => $formattedUsers,
+                'stats' => [
+                    'total_users' => $totalUsers,
+                    'admin' => $adminCount,
+                    'manager' => $managerCount,
+                    'active' => $activeCount,
+                ],
+            ]);
+        }
+
+        $users = $query->paginate($perPage);
+
+        $formattedUsers = collect($users->items())->map(fn($user) => $this->formatUser($user));
+
+        return response()->json([
+            'success' => true,
+            'data' => $formattedUsers,
+            'stats' => [
+                'total_users' => $totalUsers,
+                'admin' => $adminCount,
+                'manager' => $managerCount,
+                'active' => $activeCount,
+            ],
+            'meta' => [
+                'current_page' => $users->currentPage(),
+                'last_page' => $users->lastPage(),
+                'per_page' => $users->perPage(),
+                'total' => $users->total(),
+            ],
+        ]);
+    }
+
+    public function show(string $id)
+    {
+        $user = User::with(['branch.company', 'permissions'])->find($id);
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not found'
+            ], 404);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $this->formatUser($user)
+        ]);
+    }
+
+    public function store(Request $request)
+    {
+        $authUser = auth()->user();
+
+        if (!$authUser) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized'
+            ], 401);
+        }
+
+        $validated = $request->validate([
+            'first_name' => ['required', 'string', 'max:255'],
+            'last_name' => ['required', 'string', 'max:255'],
+            'email' => ['required', 'email', 'max:255', 'unique:users,email'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
+            'branch_id' => ['required', 'integer', 'exists:branches,branch_id'],
+            'role' => ['required', Rule::in(['staff', 'pharmacist', 'owner', 'branch_manager', 'admin'])],
+            'address' => ['required', 'string', 'max:500'],
+            'permission_ids' => ['nullable', 'array'],
+            'permission_ids.*' => ['integer', 'exists:permissions,permission_id'],
+            'manager_pin' => ['nullable', 'string', 'regex:/^\d{4,8}$/', 'confirmed'],
+        ]);
+
+        if (in_array($validated['role'], ['branch_manager', 'owner', 'admin'], true)
+            && empty($validated['manager_pin'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'A 4 to 8 digit manager PIN is required for this role.',
+            ], 422);
+        }
+
+        $authCompanyId = $authUser->branch?->company_id;
+
+        if (!$authCompanyId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Authenticated user is not assigned to a valid company'
+            ], 422);
+        }
+
+        $branch = Branch::query()
+            ->where('branch_id', $validated['branch_id'])
+            ->where('company_id', $authCompanyId)
+            ->where('status', 'active')
+            ->first();
+
+        if (!$branch) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Selected branch is not available for your company'
+            ], 422);
+        }
+
+        DB::beginTransaction();
+
+        try {
+            $user = User::create([
+                'first_name' => $validated['first_name'],
+                'last_name' => $validated['last_name'],
+                'email' => $validated['email'],
+                'password' => Hash::make($validated['password']),
+                'branch_id' => $branch->branch_id,
+                'role' => $validated['role'],
+                'address' => $validated['address'],
+                'status' => 'approved',
+                'manager_pin_hash' => !empty($validated['manager_pin'])
+                    ? Hash::make($validated['manager_pin'])
+                    : null,
+            ]);
+
+            $user->permissions()->sync(
+                $this->defaultRolePermissionIds($validated['role'])
+            );
+
+            $user->load(['branch.company', 'permissions']);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'User created successfully',
+                'data' => $this->formatUser($user)
+            ], 201);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to create user',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function update(Request $request, string $id)
+    {
+        $user = User::find($id);
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not found'
+            ], 404);
+        }
+
+        $validated = $request->validate([
+            'first_name' => ['required', 'string', 'max:255'],
+            'last_name' => ['required', 'string', 'max:255'],
+            'email' => [
+                'required',
+                'email',
+                'max:255',
+                Rule::unique('users', 'email')->ignore($user->user_id, 'user_id')
+            ],
+            'address' => ['nullable', 'string', 'max:500'],
+            'role' => ['nullable', Rule::in(['staff', 'pharmacist', 'owner', 'branch_manager', 'admin'])],
+            'manager_pin' => ['nullable', 'string', 'regex:/^\d{4,8}$/', 'confirmed'],
+        ]);
+
+        $resultingRole = $validated['role'] ?? $user->role;
+        if (in_array($resultingRole, ['branch_manager', 'owner', 'admin'], true)
+            && array_key_exists('role', $validated)
+            && !$user->manager_pin_hash
+            && empty($validated['manager_pin'])) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Set a 4 to 8 digit manager PIN before assigning this role.',
+            ], 422);
+        }
+
+        if (!in_array($resultingRole, ['branch_manager', 'owner', 'admin'], true)) {
+            $validated['manager_pin_hash'] = null;
+        } elseif (!empty($validated['manager_pin'])) {
+            $validated['manager_pin_hash'] = Hash::make($validated['manager_pin']);
+        }
+        unset($validated['manager_pin']);
+
+        DB::transaction(function () use ($user, $validated) {
+            $user->update($validated);
+            if (!empty($validated['role'])) {
+                $user->permissions()->sync($this->defaultRolePermissionIds($validated['role']));
+            }
+        });
+
+        $user->load(['branch.company', 'permissions']);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'User updated successfully',
+            'data' => $this->formatUser($user)
+        ]);
+    }
+
+    public function archived(Request $request)
+    {
+        $query = User::onlyTrashed()->with(['branch.company','permissions']);
+        $query = $this->applyUserVisibilityScope($request, $query, $request->user());
+        $rows = $query->orderByDesc('deleted_at')->paginate(20);
+        return response()->json(['success'=>true,'data'=>$rows->map(fn($user)=>$this->formatUser($user)),
+            'meta'=>['current_page'=>$rows->currentPage(),'last_page'=>$rows->lastPage(),'total'=>$rows->total()]]);
+    }
+
+    public function restore(Request $request, string $id)
+    {
+        $data = $request->validate(['reason'=>['required','string','max:500']]);
+        $user = User::onlyTrashed()->findOrFail($id);
+        DB::transaction(function() use($user,$request,$data) {
+            $user->restore();
+            $user->update(['status'=>'pending']);
+            $user->tokens()->delete();
+            \App\Models\v1\SystemAuditLog::create(['user_id'=>$request->user()->user_id,'action'=>'user_restored',
+                'details'=>'Restored user #'.$user->user_id.' for approval. Reason: '.$data['reason'],'ip_address'=>$request->ip()]);
+        });
+        return response()->json(['success'=>true,'message'=>'User restored as pending. Approval is required before sign-in.']);
+    }
+
+    public function destroy(string $id)
+    {
+        $user = User::find($id);
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not found'
+            ], 404);
+        }
+
+        if ((int) auth()->id() === (int) $user->user_id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You cannot delete your own account'
+            ], 422);
+        }
+
+        $user->update(['status' => 'deleted']);
+        $user->tokens()->delete();
+        $user->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'User deleted successfully and moved to Archived Users.'
+        ]);
+    }
+
+    public function updateUserStatus(string $id, string $status)
+    {
+        if (!in_array($status, ['approved', 'pending', 'rejected'], true)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid user status'
+            ], 422);
+        }
+
+        $user = User::find($id);
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not found'
+            ], 404);
+        }
+
+        $user->update(['status' => $status]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'User status updated successfully'
+        ]);
+    }
+
+    public function updateUserBranch(string $id, string $branch_id)
+    {
+        $user = User::find($id);
+        $branch = Branch::find($branch_id);
+        if (!$user || !$branch) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User or branch not found'
+            ], 404);
+        }
+        if($user->branch_id == $branch_id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User is already assigned to this branch'
+            ], 400);
+        }
+
+        $user->update(['branch_id' => $branch_id]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'User branch updated successfully'
+        ]);
+    }
+
+    public function permissionOptions()
+    {
+        $permissions = Permission::query()
+            ->where('permission_name', '!=', 'delivery')
+            ->orderBy('permission_name')
+            ->get(['permission_id', 'permission_name', 'description']);
+
+        return response()->json([
+            'success' => true,
+            'data' => $permissions,
+            'role_access' => collect(\App\Services\v1\RoleAccess::USER_ROLES)
+                ->mapWithKeys(fn ($role) => [$role => \App\Services\v1\RoleAccess::policy($role)]),
+        ]);
+    }
+
+    public function userPermissions(string $id)
+    {
+        $user = User::with('permissions')->find($id);
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not found'
+            ], 404);
+        }
+
+        $permissions = Permission::query()
+            ->where('permission_name', '!=', 'delivery')
+            ->orderBy('permission_name')
+            ->get(['permission_id', 'permission_name', 'description']);
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'user_id' => $user->user_id,
+                'permission_ids' => $this->defaultRolePermissionIds($user->role),
+                'permissions' => $permissions,
+            ]
+        ]);
+    }
+
+    public function updateUserPermissions(Request $request, string $id)
+    {
+        $validated = $request->validate([
+            'permission_ids' => ['required', 'array'],
+            'permission_ids.*' => ['integer', 'exists:permissions,permission_id'],
+        ]);
+
+        $user = User::find($id);
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User not found'
+            ], 404);
+        }
+
+        DB::beginTransaction();
+
+        try {
+            $expected = $this->defaultRolePermissionIds($user->role);
+            $submitted = $validated['permission_ids'];
+            sort($expected);
+            sort($submitted);
+            if ($expected !== $submitted) {
+                DB::rollBack();
+                return response()->json(['success' => false, 'message' => 'Modules are assigned by role. Change the user role to change access.'], 422);
+            }
+            $user->permissions()->sync($expected);
+            $user->load(['branch.company', 'permissions']);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'User permissions updated successfully',
+                'data' => $this->formatUser($user)
+            ]);
+        } catch (\Throwable $e) {
+            DB::rollBack();
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to update user permissions',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+}

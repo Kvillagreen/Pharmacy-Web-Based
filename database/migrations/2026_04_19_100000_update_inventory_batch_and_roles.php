@@ -15,12 +15,18 @@ return new class extends Migration
             }
         });
 
-        DB::statement('UPDATE inventories INNER JOIN medicines ON medicines.medicine_id = inventories.medicine_id SET inventories.stocks = medicines.stocks WHERE inventories.stocks = 0');
+        DB::table('inventories')->where('stocks', 0)->update([
+            'stocks' => DB::raw('(SELECT stocks FROM medicines WHERE medicines.medicine_id = inventories.medicine_id)'),
+        ]);
 
         if (Schema::hasColumn('batches', 'supplier_id')) {
             Schema::table('batches', function (Blueprint $table) {
                 $table->dropForeign(['supplier_id']);
             });
+
+            if (Schema::hasIndex('batches', 'batches_supplier_idx')) {
+                Schema::table('batches', fn (Blueprint $table) => $table->dropIndex('batches_supplier_idx'));
+            }
 
             Schema::table('batches', function (Blueprint $table) {
                 $table->dropColumn('supplier_id');
@@ -31,7 +37,7 @@ return new class extends Migration
             Schema::dropIfExists('suppliers');
         }
 
-        DB::statement("ALTER TABLE users MODIFY role ENUM('staff', 'pharmacist', 'owner', 'branch_manager', 'admin', 'super_admin') NOT NULL");
+        Schema::table('users', fn (Blueprint $table) => $table->string('role')->change());
 
         DB::table('users')->where('role', 'inventory')->update(['role' => 'staff']);
         DB::table('users')->where('role', 'user')->update(['role' => 'staff']);
@@ -40,7 +46,7 @@ return new class extends Migration
 
     public function down(): void
     {
-        DB::statement("ALTER TABLE users MODIFY role ENUM('super_admin', 'admin', 'pharmacist', 'inventory', 'user', 'manager') NOT NULL");
+        if (DB::getDriverName() === 'mysql') DB::statement("ALTER TABLE users MODIFY role ENUM('super_admin', 'admin', 'pharmacist', 'inventory', 'user', 'manager') NOT NULL");
 
         DB::table('users')->where('role', 'staff')->update(['role' => 'inventory']);
         DB::table('users')->where('role', 'branch_manager')->update(['role' => 'manager']);

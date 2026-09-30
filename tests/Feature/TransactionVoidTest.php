@@ -1,69 +1,121 @@
 <?php
-
 namespace Tests\Feature;
-
-use App\Http\Controllers\v1\TransactionController;
-use App\Models\v1\Branch;
-use App\Models\v1\User;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
+use App\Models\v1\{Batch, Branch, Inventory, Medicine, Transaction, User};
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Hash;
 use Tests\TestCase;
 
 class TransactionVoidTest extends TestCase
 {
+    use RefreshDatabase;
+    private User $cashier;
+    private Transaction $sale;
+    private Medicine $medicine;
+    private array $inventories = [];
+
     protected function setUp(): void
     {
         parent::setUp();
-        config(['database.default' => 'sqlite', 'database.connections.sqlite.database' => ':memory:']);
-        DB::purge('sqlite');
-        DB::statement('CREATE TABLE branches (branch_id INTEGER PRIMARY KEY, company_id INTEGER)');
-        DB::statement('CREATE TABLE transactions (transaction_id INTEGER PRIMARY KEY, branch_id INTEGER, status TEXT, voided_at TEXT, void_reason TEXT, updated_at TEXT)');
-        DB::statement('CREATE TABLE transaction_items (transaction_item_id INTEGER PRIMARY KEY, transaction_id INTEGER, medicine_id INTEGER, batch_id INTEGER, quantity INTEGER)');
-        DB::statement('CREATE TABLE inventories (inventory_id INTEGER PRIMARY KEY, branch_id INTEGER, medicine_id INTEGER, batch_id INTEGER, stocks INTEGER, updated_at TEXT)');
-        DB::statement('CREATE TABLE medicines (medicine_id INTEGER PRIMARY KEY, stocks INTEGER, updated_at TEXT)');
-        DB::table('branches')->insert(['branch_id' => 1, 'company_id' => 1]);
-        DB::table('transactions')->insert(['transaction_id' => 1, 'branch_id' => 1, 'status' => 'completed']);
-        DB::table('medicines')->insert(['medicine_id' => 1, 'stocks' => 15]);
-        foreach ([1 => 3, 2 => 2] as $batch => $quantity) {
-            DB::table('transaction_items')->insert(['transaction_item_id' => $batch, 'transaction_id' => 1, 'medicine_id' => 1, 'batch_id' => $batch, 'quantity' => $quantity]);
-            DB::table('inventories')->insert(['inventory_id' => $batch, 'branch_id' => 1, 'medicine_id' => 1, 'batch_id' => $batch, 'stocks' => 5]);
+        $this->cashier = User::factory()->create(['role' => 'admin', 'status' => 'approved', 'manager_pin_hash' => Hash::make('1234')]);
+        $this->medicine = Medicine::factory()->create(['stocks' => 15, 'is_dangerous' => false, 'needs_protection' => false]);
+        $this->sale = Transaction::create([
+            'user_id' => $this->cashier->user_id, 'branch_id' => $this->cashier->branch_id,
+            'status' => 'completed', 'total_amount' => 50, 'sub_total' => 50,
+            'payment_method' => 'Cash', 'used_amount' => 50, 'change' => 0,
+        ]);
+        foreach ([3, 2] as $quantity) {
+            $batch = Batch::factory()->create(['expiry_date' => now()->addYear()->toDateString()]);
+            $this->inventories[] = Inventory::create(['branch_id' => $this->cashier->branch_id, 'medicine_id' => $this->medicine->medicine_id, 'batch_id' => $batch->batch_id, 'stocks' => 5]);
+            $this->sale->items()->create(['medicine_id' => $this->medicine->medicine_id, 'batch_id' => $batch->batch_id, 'quantity' => $quantity, 'price' => 10]);
         }
-        DB::table('inventories')->insert(['inventory_id' => 3, 'branch_id' => 2, 'medicine_id' => 1, 'batch_id' => 1, 'stocks' => 5]);
+        $other = Branch::factory()->create(['company_id' => $this->cashier->branch->company_id]);
+        $this->inventories[] = Inventory::create(['branch_id' => $other->branch_id, 'medicine_id' => $this->medicine->medicine_id, 'batch_id' => $this->inventories[0]->batch_id, 'stocks' => 5]);
+        $this->actingAs($this->cashier, 'sanctum');
     }
-
-    private function voidSale(int $company = 1)
+    private function voidSale(string $pin = '1234')
     {
-        $user = (new User)->forceFill(['branch_id' => 1, 'role' => 'admin']);
-        $user->setRelation('branch', (new Branch)->forceFill(['company_id' => $company]));
-        $request = Request::create('/transaction/1/void', 'POST');
-        $request->setUserResolver(fn () => $user);
-        return (new TransactionController)->void($request, '1');
+        return $this->postJson('/api/v1/transaction/'.$this->sale->transaction_id.'/void', ['manager_id'=>$this->cashier->user_id,'manager_pin' => $pin, 'void_reason' => 'Test correction']);
     }
-
-    public function test_void_restores_each_original_batch_once_and_keeps_other_branches_unchanged(): void
+    public function test_sale_updates_stock_once_and_both_reporting_modules(): void
     {
-        $this->assertSame(200, $this->voidSale()->status());
-        $this->assertSame([8, 7, 5], DB::table('inventories')->orderBy('inventory_id')->pluck('stocks')->all());
-        $this->assertSame(20, DB::table('medicines')->value('stocks'));
-        $this->assertSame('voided', DB::table('transactions')->value('status'));
-        $this->assertSame(422, $this->voidSale()->status());
-        $this->assertSame(20, DB::table('inventories')->sum('stocks'));
-        $this->assertSame(0, DB::transactionLevel());
+        $this->medicine->update(['price' => 10]);
+        $this->getJson('/api/v1/dashboard')->assertOk()->assertJsonPath('data.summary.total_revenue', 50);
+        $this->getJson('/api/v1/reports')->assertOk()->assertJsonPath('data.summary.total_revenue', 50);
+        $inventory = $this->inventories[0];
+        $payload = [
+            'user_id' => $this->cashier->user_id, 'branch_id' => $this->cashier->branch_id,
+            'transaction_type' => 'regular', 'total_amount' => 20, 'sub_total' => 20,
+            'used_amount' => 20, 'change' => 0, 'discount' => 0, 'payment_method' => 'Cash',
+            'request_token' => (string) \Illuminate\Support\Str::uuid(),
+            'items' => [['medicine_id' => $this->medicine->medicine_id, 'inventory_id' => $inventory->inventory_id, 'batch_id' => $inventory->batch_id, 'quantity' => 2]],
+        ];
+        $this->postJson('/api/v1/transaction', $payload)->assertCreated();
+        $this->postJson('/api/v1/transaction', $payload)->assertCreated();
+        $this->assertSame(3, (int) $inventory->fresh()->stocks);
+        $this->assertSame(13, (int) $this->medicine->fresh()->stocks);
+        $this->getJson('/api/v1/dashboard')->assertOk()->assertJsonPath('data.summary.total_revenue', 70);
+        $this->getJson('/api/v1/reports')->assertOk()->assertJsonPath('data.summary.total_revenue', 70);
+        $inventory->batch->update(['status' => 'archived']);
+        $payload['request_token'] = (string) \Illuminate\Support\Str::uuid();
+        $this->postJson('/api/v1/transaction', $payload)->assertStatus(422);
+        $this->assertSame(3, (int) $inventory->fresh()->stocks);
     }
-
-    public function test_missing_batch_rolls_back_every_stock_change(): void
+    public function test_void_restores_original_batches_once_and_refreshes_dashboard_and_reports(): void
     {
-        DB::table('inventories')->where('inventory_id', 2)->delete();
-        $this->assertSame(422, $this->voidSale()->status());
-        $this->assertSame(5, DB::table('inventories')->where('inventory_id', 1)->value('stocks'));
-        $this->assertSame('completed', DB::table('transactions')->value('status'));
-        $this->assertSame(0, DB::transactionLevel());
+        $this->getJson('/api/v1/dashboard')->assertOk()->assertJsonPath('data.summary.total_revenue', 50);
+        $this->getJson('/api/v1/reports')->assertOk()->assertJsonPath('data.summary.total_revenue', 50);
+        $this->voidSale()->assertOk();
+        $this->assertSame([8, 7, 5], array_map(fn ($i) => (int) $i->fresh()->stocks, $this->inventories));
+        $this->assertSame(20, (int) $this->medicine->fresh()->stocks);
+        $this->voidSale()->assertStatus(409);
+        $this->assertSame(20, (int) $this->medicine->fresh()->stocks);
+        $this->getJson('/api/v1/dashboard')->assertOk()->assertJsonPath('data.summary.total_revenue', 0);
+        $this->getJson('/api/v1/reports')->assertOk()->assertJsonPath('data.summary.total_revenue', 0);
     }
-
+    public function test_invalid_manager_pin_does_not_change_stock(): void
+    {
+        $this->voidSale('9999')->assertStatus(422);
+        $this->assertSame([5, 5, 5], array_map(fn ($i) => (int) $i->fresh()->stocks, $this->inventories));
+        $this->assertSame('completed', $this->sale->fresh()->status);
+    }
     public function test_other_company_cannot_void_sale(): void
     {
-        $this->assertSame(403, $this->voidSale(2)->status());
-        $this->assertSame(15, DB::table('inventories')->sum('stocks'));
-        $this->assertSame('completed', DB::table('transactions')->value('status'));
+        $branch = Branch::factory()->create();
+        $other = User::factory()->create(['role' => 'admin', 'status' => 'approved', 'branch_id' => $branch->branch_id]);
+        $this->actingAs($other, 'sanctum');
+        $this->voidSale()->assertForbidden();
+        $this->assertSame('completed', $this->sale->fresh()->status);
+    }
+
+    public function test_sale_token_is_required_and_reuse_must_match_the_payload(): void
+    {
+        $this->medicine->update(['price'=>10]);
+        $payload=['user_id'=>$this->cashier->user_id,'branch_id'=>$this->cashier->branch_id,'transaction_type'=>'regular',
+            'total_amount'=>10,'sub_total'=>10,'used_amount'=>10,'change'=>0,'discount'=>0,'payment_method'=>'Cash',
+            'items'=>[['medicine_id'=>$this->medicine->medicine_id,'inventory_id'=>$this->inventories[0]->inventory_id,'quantity'=>1]]];
+        $this->postJson('/api/v1/transaction',$payload)->assertUnprocessable()->assertJsonValidationErrors('request_token');
+        $payload['request_token']=(string)\Illuminate\Support\Str::uuid();
+        $first=$this->postJson('/api/v1/transaction',$payload)->assertCreated();
+        $this->postJson('/api/v1/transaction',$payload)->assertCreated()->assertJsonPath('data.transaction_id',$first->json('data.transaction_id'));
+        $payload['used_amount']=20;
+        $this->postJson('/api/v1/transaction',$payload)->assertStatus(409);
+        $this->assertSame(4,(int)$this->inventories[0]->fresh()->stocks);
+    }
+
+    public function test_void_requires_named_approver_and_reason():void
+    {
+        $this->postJson('/api/v1/transaction/'.$this->sale->transaction_id.'/void',['manager_pin'=>'1234'])->assertUnprocessable()->assertJsonValidationErrors(['manager_id','void_reason']);
+        $this->getJson('/api/v1/transaction/'.$this->sale->transaction_id.'/approvers')->assertOk()->assertJsonFragment(['user_id'=>$this->cashier->user_id]);
+        $this->postJson('/api/v1/transaction/'.$this->sale->transaction_id.'/void',['manager_id'=>999999,'manager_pin'=>'1234','void_reason'=>'Test'])->assertUnprocessable();
+        $this->assertSame('completed',$this->sale->fresh()->status);
+    }
+
+    public function test_distinct_approver_policy_prevents_self_approval(): void
+    {
+        config(['operations.require_distinct_void_approver' => true]);
+        $this->voidSale()->assertUnprocessable();
+        $this->assertSame('completed', $this->sale->fresh()->status);
+        $manager = User::factory()->create(['branch_id' => $this->cashier->branch_id, 'role' => 'admin', 'status' => 'approved', 'manager_pin_hash' => Hash::make('5678')]);
+        $this->postJson('/api/v1/transaction/'.$this->sale->transaction_id.'/void', ['manager_id' => $manager->user_id, 'manager_pin' => '5678', 'void_reason' => 'Independent review'])->assertOk();
     }
 }

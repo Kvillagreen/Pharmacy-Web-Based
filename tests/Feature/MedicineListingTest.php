@@ -10,16 +10,16 @@ use Tests\TestCase;
 
 class MedicineListingTest extends TestCase
 {
-    public function test_inventory_and_public_catalog_return_grouped_batch_stock(): void
+    public function test_inventory_preserves_batches_and_public_catalog_combines_the_same_stock(): void
     {
         config(['database.default' => 'sqlite', 'database.connections.sqlite.database' => ':memory:']);
         DB::purge('sqlite');
         $columns = [
             'companies' => 'company_id company_name',
             'branches' => 'branch_id company_id branch_name branch_address branch_contact status',
-            'medicines' => 'medicine_id medicine_name generic_name category type dosage unit price reorder_level is_dangerous needs_protection status',
-            'inventories' => 'inventory_id branch_id medicine_id batch_id stocks container_type container_name container_count pcs_per_container created_at updated_at',
-            'batches' => 'batch_id batch_number expiry_date received_date status mfg_date location created_at',
+            'medicines' => 'medicine_id sku medicine_name generic_name category type dosage unit price reorder_level is_dangerous needs_protection status archived_at pricing_type cost_price markup_percent vat_inclusive units_per_box is_vat_exempt',
+            'inventories' => 'inventory_id branch_id medicine_id batch_id stocks container_type container_name container_count pcs_per_container cost_price created_at updated_at cost_includes_vat',
+            'batches' => 'batch_id supplier batch_number expiry_date received_date status mfg_date location created_at',
         ];
         foreach ($columns as $name => $fields) {
             Schema::create($name, function ($table) use ($fields) {
@@ -40,8 +40,8 @@ class MedicineListingTest extends TestCase
             $response = $controller->$method(Request::create('/', 'GET', ['company_id' => 1, 'branch_id' => 1, 'group_display' => 1]));
             $this->assertSame(200, $response->status());
             $data = $response->getData(true);
-            $this->assertCount(1, $data['data']);
-            $this->assertSame(10, $data['data'][0]['stocks']);
+            $this->assertCount($method === 'index' ? 2 : 1, $data['data']);
+            $this->assertSame(10, (int) array_sum(array_column($data['data'], 'stocks')));
         }
     }
 }

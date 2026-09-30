@@ -187,11 +187,7 @@ class TransactionController extends Controller
             $statusQuery->whereNull('medicines.status')
                 ->orWhere('medicines.status', 'active');
         })
-        ->where('inventories.stocks', '>', 0)
-        ->where(function ($statusQuery) {
-            $statusQuery->whereNull('batches.status')
-                ->orWhereNotIn('batches.status', ['archived', 'pulled_out', 'disposed', 'deleted']);
-        })
+        ->where('medicines.stocks', '>', 0)
         ->where('batches.expiry_date', '>', now())
         ->orderBy('medicines.medicine_name')
         ->orderBy('batches.expiry_date', 'asc')
@@ -201,9 +197,7 @@ class TransactionController extends Controller
             $query = (new MedicineQuery())->apply($request, $query);
         }
 
-        $paginated = $request->boolean('group_display')
-            ? \App\Services\v1\MedicineDisplay::paginate($query, $request, $perPage)
-            : $query->paginate($perPage);
+        $paginated = $query->paginate($perPage);
 
         $inventorySummary = Inventory::query()
             ->join('branches', 'branches.branch_id', '=', 'inventories.branch_id')
@@ -345,6 +339,7 @@ class TransactionController extends Controller
                     'inventories.stocks',
                     'medicines.medicine_name',
                     'medicines.price',
+                    DB::raw('COALESCE(inventories.cost_price, medicines.cost_price) as cost_price'),
                     'medicines.is_dangerous',
                     'medicines.needs_protection',
                     'batches.batch_number',
@@ -422,6 +417,7 @@ class TransactionController extends Controller
                         'mfg_date' => $inventoryBatch->mfg_date,
                         'quantity' => $deductedStocks,
                         'price' => $inventoryBatch->price,
+                        'cost_price' => $inventoryBatch->cost_price,
                         'created_at' => now(),
                         'updated_at' => now(),
                     ];
@@ -468,6 +464,7 @@ class TransactionController extends Controller
             $transaction->load('attachments');
 
             return response()->json([
+                'success' => true,
                 'message' => 'Transaction created successfully',
                 'data' => $transaction,
             ], 201);
@@ -480,9 +477,10 @@ class TransactionController extends Controller
             ]);
 
             return response()->json([
+                'success' => false,
                 'message' => 'Failed to create transaction',
                 'error' => $e->getMessage(),
-            ], 500);
+            ], str_contains($e->getMessage(), 'stock') || str_contains($e->getMessage(), 'available') ? 422 : 500);
         } finally {
             optional($lock)->release();
         }
@@ -534,7 +532,6 @@ class TransactionController extends Controller
                 ->firstOrFail();
 
             if (($transaction->status ?? 'completed') === 'voided') {
-                DB::rollBack();
                 return response()->json([
                     'success' => false,
                     'message' => 'Transaction is already voided.',
@@ -542,21 +539,6 @@ class TransactionController extends Controller
             }
 
             $medicineIds = collect();
-
-            $user = $request->user();
-            $sameCompany = $user?->branch?->company_id &&
-                (int) $user->branch->company_id === (int) $transaction->branch?->company_id;
-            if (!$user || (!$sameCompany && $user->role !== 'super_admin') ||
-                (!in_array($user->role, ['admin', 'owner', 'super_admin'], true) &&
-                    (int) $user->branch_id !== (int) $transaction->branch_id)) {
-                DB::rollBack();
-                return response()->json(['success' => false, 'message' => 'You cannot void transactions outside your assigned scope.'], 403);
-            }
-
-            if ($transaction->items->isEmpty()) {
-                DB::rollBack();
-                return response()->json(['success' => false, 'message' => 'No transaction items are available to restore.'], 422);
-            }
 
             foreach ($transaction->items as $item) {
                 $inventory = Inventory::query()
@@ -566,12 +548,10 @@ class TransactionController extends Controller
                     ->lockForUpdate()
                     ->first();
 
-                if (!$item->batch_id || !$inventory || (int) $item->quantity <= 0) {
-                    DB::rollBack();
-                    return response()->json(['success' => false, 'message' => 'The original batch inventory could not be restored. No stock changes were saved.'], 422);
+                if ($inventory) {
+                    $inventory->increment('stocks', (int) $item->quantity);
+                    $medicineIds->push((int) $item->medicine_id);
                 }
-                $inventory->increment('stocks', (int) $item->quantity);
-                $medicineIds->push((int) $item->medicine_id);
             }
 
             $transaction->update([

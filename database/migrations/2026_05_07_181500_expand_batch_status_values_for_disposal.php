@@ -7,11 +7,7 @@ return new class extends Migration
 {
     public function up(): void
     {
-        DB::statement("
-            ALTER TABLE batches
-            MODIFY status ENUM('active', 'inactive', 'deleted', 'pulled_out', 'disposed')
-            NOT NULL DEFAULT 'active'
-        ");
+        \Illuminate\Support\Facades\Schema::table('batches', fn (\Illuminate\Database\Schema\Blueprint $table) => $table->enum('status', ['active', 'inactive', 'deleted', 'pulled_out', 'disposed'])->default('active')->change());
     }
 
     public function down(): void
@@ -22,10 +18,6 @@ return new class extends Migration
             WHERE status IN ('pulled_out', 'disposed')
         ");
 
-        DB::statement("
-            ALTER TABLE batches
-            MODIFY status ENUM('active', 'inactive', 'deleted')
-            NOT NULL DEFAULT 'active'
-        ");
+        \Illuminate\Support\Facades\Schema::table('batches', fn (\Illuminate\Database\Schema\Blueprint $table) => $table->enum('status', ['active', 'inactive', 'deleted'])->default('active')->change());
     }
 };

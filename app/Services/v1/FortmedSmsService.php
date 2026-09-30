@@ -37,20 +37,13 @@ class FortmedSmsService
         $senderName = trim((string) ($payload['SenderName'] ?? config('services.mysmsgate_sms.sender_name', '')));
 
         $providerPayload = [
-            'to' => $payload['ToNumber'] ?? '',
+            'to' => '+'.$this->normalizePhoneNumber($payload['ToNumber'] ?? ''),
             'message' => $payload['MessageBody'] ?? '',
-            'slot' => (int) config('services.mysmsgate_sms.slot', 0),
         ];
+        $slot=config('services.mysmsgate_sms.slot');
+        if($slot!==null && $slot!=='')$providerPayload['slot']=(int)$slot;
 
-        if ($fromNumber !== '') {
-            $providerPayload['from'] = $fromNumber;
-            $providerPayload['from_number'] = $fromNumber;
-        }
-
-        if ($senderName !== '') {
-            $providerPayload['sender_name'] = $senderName;
-            $providerPayload['sender'] = $senderName;
-        }
+        if ($device=trim((string)config('services.mysmsgate_sms.device_id',''))) $providerPayload['device_id']=$device;
 
         $response = $this->performRequest(
             'POST',
@@ -58,17 +51,34 @@ class FortmedSmsService
             $providerPayload
         );
 
+        $accepted=$response['status']>=200 && $response['status']<300 && is_array($response['decoded']) && ($response['decoded']['success']??false)===true && $this->extractProviderMessageId($response['decoded']);
         return [
-            'status' => $response['status'],
+            'status' => $accepted ? $response['status'] : ($response['status']>=400?$response['status']:502),
             'raw' => $response['decoded'],
         ];
     }
 
     public function defaults(): array
     {
+        $senderName = 'Sto. Rosario Drug Store';
+        $fromNumber = trim((string) config('services.mysmsgate_sms.from_number', ''));
+
+        if ($fromNumber === '') {
+            $branch = \App\Models\v1\Branch::where('status', 'active')
+                ->whereNotNull('branch_contact')
+                ->where('branch_contact', '!=', '')
+                ->first();
+            $fromNumber = (string) ($branch?->branch_contact ?? '');
+        }
+
+        if ($senderName === '') {
+            $company = \App\Models\v1\Company::first();
+            $senderName = (string) ($company?->company_name ?? 'KMV Pharmacy');
+        }
+
         return [
-            'sender_name' => (string) config('services.mysmsgate_sms.sender_name', ''),
-            'from_number' => (string) config('services.mysmsgate_sms.from_number', ''),
+            'sender_name' => $senderName,
+            'from_number' => $fromNumber,
         ];
     }
 
@@ -90,6 +100,11 @@ class FortmedSmsService
                 'response_keys' => array_keys($raw),
             ],
         ];
+    }
+
+    public function deviceStatus(): array {
+        $result=$this->performRequest('GET',$this->endpoint('devices'));
+        return ['status'=>$result['status'],'devices'=>collect($result['decoded']['devices']??[])->map(fn($d)=>['name'=>$d['name']??'Device','status'=>$d['status']??'unknown','default_sim_slot'=>$d['default_sim_slot']??null])->all(),'message'=>is_array($result['decoded'])?($result['decoded']['message']??null):null];
     }
 
     public function debugContext(): array
@@ -134,89 +149,78 @@ class FortmedSmsService
         return (string) $number;
     }
 
+    /** Shared gateway records must be routed independently of the viewer. */
     public function syncInboundMessages(array $messages, ?int $userId = null, ?int $branchId = null): void
     {
-        if (!$this->smsMessageTableExists()) {
-            return;
-        }
-
-        $supportsDeletedFlag = $this->supportsDeletedSmsLogColumn();
-
+        $branches = \App\Models\v1\Branch::where('status', 'active')->get();
+        $contacts = $branches->groupBy(fn ($branch) => $this->normalizePhoneNumber($branch->branch_contact));
         foreach ($messages as $message) {
-            if (!is_array($message)) {
+            $id = (string) ($message['id'] ?? '');
+            if ($id === '') continue;
+            $direction = ($message['direction'] ?? 'inbound') === 'outbound' ? 'outbound' : 'inbound';
+            $existing = SmsMessage::where('direction', $direction)->where('provider_message_id', $id)->first();
+            if ($existing?->is_deleted) continue;
+            if ($existing?->scope_verified) {
+                if ($direction==='outbound') $existing->update(['provider_payload'=>$message['raw']??$existing->provider_payload]);
                 continue;
             }
-
-            $providerMessageId = (string) ($message['id'] ?? '');
-            $providerOriginalMessageId = (string) ($message['raw']['original_message_id'] ?? $message['original_message_id'] ?? '');
-            $direction = (string) ($message['direction'] ?? 'inbound');
-            $direction = $direction === 'outbound' ? 'outbound' : 'inbound';
-            $fromNumber = (string) ($message['from_number'] ?? '');
-            $toNumber = (string) ($message['to_number'] ?? '');
-            $normalizedFrom = $this->normalizePhoneNumber($fromNumber);
-            $normalizedTo = $this->normalizePhoneNumber($toNumber);
-            $counterpartyNumber = $direction === 'outbound'
-                ? ($normalizedTo !== '' ? $normalizedTo : $normalizedFrom)
-                : ($normalizedFrom !== '' ? $normalizedFrom : $normalizedTo);
-            $receivedAt = $this->parseProviderTimestamp($message['received_at'] ?? null);
-
-            if ($this->shouldHideConversationMessage($counterpartyNumber, $receivedAt)) {
-                continue;
+            $originalId = $message['raw']['original_message_id'] ?? $message['original_message_id'] ?? null;
+            $parent = $originalId ? SmsMessage::where('direction', 'outbound')->where('scope_verified', true)
+                ->where('provider_message_id', $originalId)->first() : null;
+            $phone = $this->normalizePhoneNumber($direction === 'inbound' ? ($message['to_number'] ?? '') : ($message['from_number'] ?? ''));
+            $matches = $phone !== '' ? $contacts->get($phone, collect()) : collect();
+            // Catalog templates include the selected branch name before ':'.
+            // Only use that explicit routing label among branches sharing the destination.
+            if ($direction === 'inbound' && $matches->count() > 1) {
+                $label = trim(explode(':', (string) ($message['message_body'] ?? ''), 2)[0]);
+                $matches = $matches->filter(fn ($branch) => strcasecmp(
+                    preg_replace('/\s+/', ' ', trim($branch->branch_name)), $label) === 0);
             }
+            $resolvedBranch = $parent?->branch_id ?? ($matches->count() === 1 ? $matches->first()->branch_id : null);
 
-            $decodedMessageBody = $this->decodeStoredMessageText((string) ($message['message_body'] ?? ''));
-            $providerPayload = $this->normalizeProviderPayloadBody($message['raw'] ?? $message);
-            $existingMessage = $providerMessageId !== ''
-                ? SmsMessage::query()
-                    ->where('direction', $direction)
-                    ->where('provider_message_id', $providerMessageId)
-                    ->first()
-                : null;
-
-            if ($supportsDeletedFlag && $existingMessage?->is_deleted) {
-                continue;
+            // An explicit, unique branch label can route a shared gateway reply.
+            // Never guess from the latest customer interaction or the first branch.
+            if (!$resolvedBranch && $direction === 'inbound' && $phone === '') {
+                $label=trim(explode(':',(string)($message['message_body']??''),2)[0]);
+                $named=$branches->filter(fn($b)=>strcasecmp(trim($b->branch_name),$label)===0);
+                if($named->count()===1)$resolvedBranch=$named->first()->branch_id;
             }
+            if (!$resolvedBranch) continue;
 
-            $existingReferenceNumber = $this->supportsExtendedSmsLogColumns() && $providerMessageId !== ''
-                ? ($existingMessage?->reference_number
-                    ?? SmsMessage::query()
-                        ->where('direction', $direction)
-                        ->where('provider_message_id', $providerMessageId)
-                        ->value('reference_number'))
-                : null;
-
-            $attributes = [
-                'provider_original_message_id' => $providerOriginalMessageId !== '' ? $providerOriginalMessageId : null,
-                'user_id' => $userId,
-                'branch_id' => $branchId,
-                'sender_name' => (string) ($message['sender_name'] ?? config('services.mysmsgate_sms.sender_name', '')),
-                'from_number' => $fromNumber !== '' ? $fromNumber : null,
-                'to_number' => $toNumber !== '' ? $toNumber : null,
-                'normalized_from_number' => $normalizedFrom !== '' ? $normalizedFrom : null,
-                'normalized_to_number' => $normalizedTo !== '' ? $normalizedTo : null,
-                'counterparty_number' => $counterpartyNumber !== '' ? $counterpartyNumber : null,
-                'message_body' => $decodedMessageBody,
-                'provider_received_at' => $receivedAt,
-                'provider_payload' => $providerPayload,
-            ];
-
-            if ($supportsDeletedFlag) {
-                $attributes['is_deleted'] = false;
+            $from = $this->normalizePhoneNumber($message['from_number'] ?? '');
+            $to = $this->normalizePhoneNumber($message['to_number'] ?? '');
+            if ($to === '') {
+                $branchObj = $branches->firstWhere('branch_id', $resolvedBranch);
+                $to = $this->normalizePhoneNumber($branchObj?->branch_contact ?: config('services.mysmsgate_sms.from_number'));
             }
-
-            if ($this->supportsExtendedSmsLogColumns()) {
-                $attributes['reference_number'] = $existingReferenceNumber ?: $this->generateReferenceNumber($direction === 'outbound' ? 'OUT' : 'IN');
-                $attributes['template_tag'] = null;
-            }
-
-            SmsMessage::updateOrCreate(
-                [
-                    'direction' => $direction,
-                    'provider_message_id' => $providerMessageId !== '' ? $providerMessageId : null,
-                ],
-                $attributes
-            );
+            SmsMessage::updateOrCreate(['direction' => $direction, 'provider_message_id' => $id], [
+                'scope_verified' => true, 'branch_id' => $resolvedBranch, 'user_id' => null,
+                'provider_original_message_id' => $originalId,
+                'reference_number' => $existing?->reference_number ?: $this->generateReferenceNumber('IN'),
+                'from_number' => $from, 'to_number' => $to,
+                'normalized_from_number' => $from, 'normalized_to_number' => $to,
+                'counterparty_number' => $direction === 'inbound' ? $from : $to,
+                'message_body' => $this->decodeStoredMessageText((string) ($message['message_body'] ?? '')),
+                'provider_received_at' => $this->parseProviderTimestamp($message['received_at'] ?? null),
+                'provider_payload' => $message['raw'] ?? [], 'is_deleted' => false,
+            ]);
         }
+    }
+
+    public function syncGateway(): array
+    {
+        $lock = \Illuminate\Support\Facades\Cache::lock('sms_gateway_sync_lock', 20);
+        if (!$lock->get()) return ['success' => true];
+        try {
+            $recent = \Illuminate\Support\Facades\Cache::get('sms_gateway_sync_result');
+            if ($recent !== null) return $recent;
+            $result = $this->fetchReplies(100);
+            $success = $result['status'] >= 200 && $result['status'] < 300;
+            if ($success) $this->syncInboundMessages($result['messages']);
+            $status = ['success' => $success];
+            \Illuminate\Support\Facades\Cache::put('sms_gateway_sync_result', $status, 15);
+            return $status;
+        } finally { $lock->release(); }
     }
 
     public function storeOutboundMessage(
@@ -235,6 +239,7 @@ class FortmedSmsService
         $toNumber = (string) ($payload['ToNumber'] ?? '');
         $attributes = [
             'direction' => 'outbound',
+            'scope_verified' => true,
             'provider_message_id' => $this->extractProviderMessageId($providerResponse),
             'provider_original_message_id' => null,
             'user_id' => $userId,
@@ -262,7 +267,7 @@ class FortmedSmsService
         return SmsMessage::create($attributes);
     }
 
-    public function getStoredConversations(int $limit = 20): array
+    public function getStoredConversations(int $limit = 20, array $branchIds = [], ?int $beforeId = null): array
     {
         if (!$this->smsMessageTableExists()) {
             return [
@@ -272,42 +277,41 @@ class FortmedSmsService
             ];
         }
 
-        $this->repairUnreadableStoredMessages();
-
-        $query = SmsMessage::query()
-            ->orderByDesc('provider_received_at')
+        $query = SmsMessage::query()->whereIn('branch_id', $branchIds)->where('scope_verified', true)
+            ->when($beforeId, fn ($q) => $q->where('sms_message_id', '<', $beforeId))
             ->orderByDesc('sms_message_id');
 
         if ($this->supportsDeletedSmsLogColumn()) {
             $query->where('is_deleted', false);
         }
 
-        $messages = $query->get();
+        $pageSize = max(20, min($limit * 10, 250));
+        $messages = $query->limit($pageSize + 1)->get();
+        $hasMore = $messages->count() > $pageSize;
+        $messages = $messages->take($pageSize);
 
         $grouped = $messages
             ->groupBy(fn (SmsMessage $message) => $message->counterparty_number ?: 'unknown')
             ->map(fn (Collection $conversation, string $key) => $this->transformConversation($conversation, $key))
             ->sortByDesc(fn (array $conversation) => $conversation['last_received_at'] ?? '')
             ->values()
-            ->take(max(1, min($limit, 100)))
             ->all();
 
         return [
             'conversations' => $grouped,
             'total_messages' => $messages->count(),
             'unique_customers' => collect($grouped)->count(),
+            'next_before_id' => $hasMore ? $messages->last()?->sms_message_id : null,
         ];
     }
 
-    public function getStoredLogs(int $limit = 100): array
+    public function getStoredLogs(int $limit = 100, array $branchIds = []): array
     {
         if (!$this->smsMessageTableExists()) {
             return [];
         }
 
-        $this->repairUnreadableStoredMessages();
-
-        $query = SmsMessage::query()
+        $query = SmsMessage::query()->whereIn('branch_id', $branchIds)->where('scope_verified', true)
             ->orderByDesc('provider_received_at')
             ->orderByDesc('sms_message_id')
             ->take(max(1, min($limit, 250)));
@@ -330,17 +334,17 @@ class FortmedSmsService
             'normalized_to_number' => $message->normalized_to_number,
             'counterparty_number' => $this->formatDisplayPhoneNumber($message->counterparty_number),
             'message_body' => $message->message_body,
-            'received_at' => optional($message->provider_received_at)->toDateTimeString(),
+            'received_at' => $this->formatSmsTimestamp($message->provider_received_at),
         ])->values()->all();
     }
 
-    public function deleteStoredMessage(int $messageId): bool
+    public function deleteStoredMessage(int $messageId, array $branchIds = []): bool
     {
         if (!$this->smsMessageTableExists()) {
             return false;
         }
 
-        $query = SmsMessage::query()->where('sms_message_id', $messageId);
+        $query = SmsMessage::query()->whereIn('branch_id', $branchIds)->where('scope_verified', true)->where('sms_message_id', $messageId);
 
         if (!$this->supportsDeletedSmsLogColumn()) {
                 return $query->delete() > 0;
@@ -349,7 +353,7 @@ class FortmedSmsService
         return $query->update(['is_deleted' => true]) > 0;
     }
 
-    public function deleteConversation(?string $counterpartyNumber, mixed $cutoffAt = null): int
+    public function deleteConversation(?string $counterpartyNumber, mixed $cutoffAt = null, array $branchIds = []): int
     {
         if (!$this->smsMessageTableExists()) {
             return 0;
@@ -360,12 +364,12 @@ class FortmedSmsService
             return 0;
         }
 
-        $cutoff = $this->resolveConversationDeleteCutoff($normalized, $cutoffAt);
+        $cutoff = $cutoffAt ? $this->parseProviderTimestamp($cutoffAt) : now();
         if (!$cutoff) {
             return 0;
         }
 
-        $query = SmsMessage::query()
+        $query = SmsMessage::query()->whereIn('branch_id', $branchIds)->where('scope_verified', true)
             ->where('counterparty_number', $normalized)
             ->where('direction', '!=', 'system')
             ->where(function ($builder) use ($cutoff) {
@@ -378,7 +382,7 @@ class FortmedSmsService
         }
 
         $deletedCount = $query->update(['is_deleted' => true]);
-        $this->ensureDeletedConversationMarker($normalized, $cutoff);
+
 
         return $deletedCount;
     }
@@ -426,11 +430,10 @@ class FortmedSmsService
                     'https' => '',
                     'no' => ['*'],
                 ],
-                'verify' => false,
+                'verify' => config('services.http_ca_bundle', true),
             ])
-            ->retry(2, 300)
-            ->timeout(20)
-            ->connectTimeout(10);
+            ->timeout(8)
+            ->connectTimeout(3);
     }
 
     private function endpoint(string $path): string
@@ -463,85 +466,10 @@ class FortmedSmsService
                 'decoded' => $this->decodeBody($response->body()),
             ];
         } catch (\Throwable $exception) {
-            \Log::warning('SMS gateway HTTP client request failed. Falling back to cURL.', [
-                'method' => $method,
-                'url' => $url,
-                'error' => $exception->getMessage(),
-            ]);
-
-            try {
-                return $this->curlRequest($method, $url, $payload, $query);
-            } catch (\Throwable $curlException) {
-                \Log::error('SMS gateway cURL fallback request failed.', [
-                    'method' => $method,
-                    'url' => $url,
-                    'error' => $curlException->getMessage(),
-                ]);
-
-                return [
-                    'status' => 503,
-                    'decoded' => [
-                        'success' => false,
-                        'message' => 'SMS gateway request failed.',
-                        'error' => [
-                            'type' => class_basename($curlException),
-                            'message' => $curlException->getMessage(),
-                        ],
-                    ],
-                ];
-            }
+            \Log::warning('SMS gateway request failed.', ['type' => class_basename($exception)]);
+            // Never retry a timed-out send: the provider may already have accepted it.
+            return ['status' => 503, 'decoded' => ['success' => false, 'message' => 'SMS gateway unavailable.']];
         }
-    }
-
-    private function curlRequest(string $method, string $url, array $payload = [], array $query = []): array
-    {
-        if (!function_exists('curl_init')) {
-            throw new \RuntimeException('cURL extension is required for SMS gateway requests.');
-        }
-
-        $queryString = http_build_query(array_filter($query, fn ($value) => $value !== null && $value !== ''));
-        $requestUrl = $queryString !== '' ? $url . '?' . $queryString : $url;
-        $ch = curl_init($requestUrl);
-
-        $headers = [
-            'Content-Type: application/json',
-            'Accept: application/json',
-            'Cache-Control: no-cache, no-store, must-revalidate',
-            'Pragma: no-cache',
-            'Expires: 0',
-            'Authorization: ' . $this->authorizationHeader(),
-        ];
-
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_TIMEOUT => 20,
-            CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_SSL_VERIFYHOST => 0,
-            CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_PROXY => '',
-            CURLOPT_NOPROXY => '*',
-        ]);
-
-        if (strtoupper($method) === 'POST') {
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-        }
-
-        $body = curl_exec($ch);
-        $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        $error = curl_error($ch);
-        curl_close($ch);
-
-        if ($body === false) {
-            throw new \RuntimeException($error !== '' ? $error : 'Unknown cURL error while contacting SMS gateway.');
-        }
-
-        return [
-            'status' => $status > 0 ? $status : 500,
-            'decoded' => $this->decodeBody($body),
-        ];
     }
 
     private function decodeBody(?string $body): mixed
@@ -739,10 +667,19 @@ class FortmedSmsService
         }
 
         try {
-            return Carbon::parse((string) $value);
+            $timezone = config('app.timezone', 'Asia/Manila');
+            $timestamp = trim((string) $value);
+            $sourceTimezone = $this->timestampHasTimezone($timestamp) ? null : 'UTC';
+
+            return Carbon::parse($timestamp, $sourceTimezone)->timezone($timezone);
         } catch (\Throwable) {
             return null;
         }
+    }
+
+    private function timestampHasTimezone(string $value): bool
+    {
+        return preg_match('/(?:[zZ]|[+-]\d{2}:?\d{2})$/', trim($value)) === 1;
     }
 
     private function extractProviderMessageId(mixed $providerResponse): ?string
@@ -787,6 +724,7 @@ class FortmedSmsService
             ->map(fn (SmsMessage $message) => [
                 'id' => $message->sms_message_id,
                 'reference_number' => $message->reference_number,
+                'delivery_status' => $message->direction==='outbound' ? ($message->provider_payload['status']??'pending') : null,
                 'template_tag' => $message->template_tag,
                 'direction' => $message->direction,
                 'from_number' => $this->formatDisplayPhoneNumber($message->from_number),
@@ -795,7 +733,7 @@ class FortmedSmsService
                 'normalized_to_number' => $message->normalized_to_number,
                 'message_body' => $message->message_body,
                 'sender_name' => $message->sender_name,
-                'received_at' => optional($message->provider_received_at)->toDateTimeString(),
+                'received_at' => $this->formatSmsTimestamp($message->provider_received_at),
             ])
             ->values()
             ->all();
@@ -810,11 +748,11 @@ class FortmedSmsService
             'template_tag' => $latest?->template_tag,
             'message_body' => $latest?->message_body ?? '',
             'sender_name' => $latest?->sender_name ?? '',
-            'received_at' => optional($latest?->provider_received_at)->toDateTimeString(),
-            'last_received_at' => optional($latest?->provider_received_at)->toDateTimeString(),
+            'received_at' => $this->formatSmsTimestamp($latest?->provider_received_at),
+            'last_received_at' => $this->formatSmsTimestamp($latest?->provider_received_at),
             'message_count' => $sorted->count(),
             'history' => $history,
-            'raw' => $latest?->provider_payload ?? [],
+
         ];
     }
 
@@ -823,6 +761,24 @@ class FortmedSmsService
         $templateTag = trim((string) ($value ?? ''));
 
         return $templateTag !== '' ? $templateTag : 'Custom Reply';
+    }
+
+    private function formatSmsTimestamp(mixed $value): ?string
+    {
+        if (!$value) {
+            return null;
+        }
+
+        try {
+            $timezone = config('app.timezone', 'Asia/Manila');
+            $timestamp = $value instanceof Carbon
+                ? $value->copy()
+                : Carbon::parse((string) $value, $timezone);
+
+            return $timestamp->timezone($timezone)->toIso8601String();
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     private function generateReferenceNumber(string $prefix = 'SMS'): string

@@ -22,7 +22,7 @@ class MethodCompanyRequest extends FormRequest
         return [
             'company_name' => ['required', 'string', 'max:255'],
             'company_email' => ['required', 'email','unique:users,email'],
-            'tin_number' => ['required', 'string'],
+            'tin_number' => ['required', 'string', 'regex:/^\d{3}-\d{3}-\d{3}-\d{5}$/'],
 
         ];
     }
@@ -33,6 +33,7 @@ class MethodCompanyRequest extends FormRequest
             'company_name.required' => 'Company name is required.',
             'company_email.required' => 'Company email is required.',
             'tin_number.required' => 'Tin number is required.',
+            'tin_number.regex' => 'The TIN must follow the format: 000-000-000-00000.',
             'company_email.email' => 'Email is invalid.',
             'company_email.unique' => 'Email already exists.',
         ];

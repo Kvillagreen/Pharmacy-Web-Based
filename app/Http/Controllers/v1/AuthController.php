@@ -27,10 +27,11 @@ class AuthController extends Controller
     private function rolePermissionNames(string $role): array
     {
         return match ($role) {
-            'staff' => ['dashboard', 'sales', 'sms', 'inventory', 'delivery'],
-            'pharmacist' => ['sales', 'sms', 'inventory', 'fefo', 'drugs', 'delivery'],
-            'branch_manager' => ['dashboard', 'inventory', 'fefo', 'delivery', 'reports'],
-            'owner', 'admin', 'super_admin' => ['dashboard', 'sales', 'sms', 'inventory', 'fefo', 'drugs', 'delivery', 'reports', 'users', 'settings', 'branches'],
+            'staff' => ['dashboard', 'sales', 'sms', 'inventory', 'fefo', 'drugs', 'settings'],
+            'pharmacist' => ['sales', 'sms', 'inventory', 'fefo', 'drugs', 'settings'],
+            'branch_manager' => ['dashboard', 'sales', 'sms', 'inventory', 'fefo', 'drugs', 'reports', 'settings'],
+            'owner', 'admin' => ['dashboard', 'sales', 'sms', 'inventory', 'fefo', 'drugs', 'reports', 'users', 'settings', 'branches'],
+            'super_admin' => [],
             default => ['dashboard'],
         };
     }
@@ -85,7 +86,7 @@ class AuthController extends Controller
         return [
             'notify_transactions' => (bool) ($user->notify_transactions ?? true),
             'notify_user_registrations' => (bool) ($user->notify_user_registrations ?? true),
-            'notify_low_stock' => (bool) ($user->notify_low_stock ?? true),
+            'notify_low_stock' => true,
             'notify_expiry_alerts' => (bool) ($user->notify_expiry_alerts ?? true),
             'notify_security_alerts' => (bool) ($user->notify_security_alerts ?? true),
             'notify_browser' => (bool) ($user->notify_browser ?? true),
@@ -178,9 +179,7 @@ class AuthController extends Controller
               'email' => $user->email,
               'branch_id' => $user->branch_id,
               'branch_name' => $user->branch?->branch_name,
-              'branch_address' => $user->branch?->branch_address,
-            'branch_contact' => $user->branch?->branch_contact,
-            'theme_key' => $user->branch?->theme_key ?? 'emerald',
+              'theme_key' => $user->branch?->theme_key ?? 'emerald',
               'role' => $user->role,
               'address' => $user->address,
               'status' => $user->status,
@@ -297,16 +296,12 @@ class AuthController extends Controller
             'last_seen_ip' => $request->ip(),
         ]);
 
-        $sessionUserPayload = [
+        return $this->response(true, 'Authenticated', [
             'user_id' => $user->user_id,
             'first_name' => $user->first_name,
             'last_name' => $user->last_name,
             'email' => $user->email,
             'branch_id' => $user->branch_id,
-            'branch_name' => $user->branch?->branch_name ?? $companyData?->branch_name,
-            'branch_address' => $user->branch?->branch_address,
-            'branch_contact' => $user->branch?->branch_contact,
-            'theme_key' => $user->branch?->theme_key ?? 'emerald',
             'role' => $user->role,
             'address' => $user->address,
             'status' => $user->status,
@@ -317,9 +312,8 @@ class AuthController extends Controller
             'permissions' => $permissionNames,
             'created_at' => $user->created_at,
             'login_at' => $user->login_at,
-        ];
 
-        return $this->response(true, 'Authenticated', $sessionUserPayload, [
+        ], [
             'authenticated' => true,
         ]);
     }
@@ -397,7 +391,8 @@ class AuthController extends Controller
         }
 
         $lowStockNotifications = collect();
-        if ($notificationPreferences['notify_low_stock']) {
+        // Essential stock alerts are available to every approved user in their branch scope.
+        {
             $lowStockNotifications = Inventory::query()
                 ->join('medicines', 'inventories.medicine_id', '=', 'medicines.medicine_id')
                 ->join('branches', 'inventories.branch_id', '=', 'branches.branch_id')
@@ -411,7 +406,6 @@ class AuthController extends Controller
                     'inventories.updated_at',
                 ])
                 ->latest('inventories.updated_at')
-                ->limit(6)
                 ->get()
                 ->map(fn ($item) => [
                     'type' => 'inventory',
@@ -460,7 +454,6 @@ class AuthController extends Controller
 
         $notifications = $storedNotifications
             ->concat($userNotifications)
-            ->concat($lowStockNotifications)
             ->concat($expiryNotifications)
             ->concat($securityNotifications)
             ->sortByDesc(function ($notification) {
@@ -468,11 +461,14 @@ class AuthController extends Controller
             })
             ->sortByDesc('created_at')
             ->take(12)
+            ->concat($lowStockNotifications)
             ->values();
 
         return $this->response(true, 'Header notifications fetched successfully', [
             'notifications' => $notifications,
-            'unread_count' => $notifications->count(),
+            'unread_count' => $notifications
+                ->filter(fn ($notification) => empty($notification['read_at']))
+                ->count(),
         ]);
     }
 
@@ -528,9 +524,7 @@ class AuthController extends Controller
                   'address' => $user->address,
                   'branch_id' => $user->branch_id,
                   'branch_name' => $user->branch?->branch_name ?? $companyData?->branch_name,
-                  'branch_address' => $user->branch?->branch_address,
-            'branch_contact' => $user->branch?->branch_contact,
-            'theme_key' => $user->branch?->theme_key ?? 'emerald',
+                  'theme_key' => $user->branch?->theme_key ?? 'emerald',
                   'company_id' => $companyData?->company_id,
                   'company_name' => $companyData?->company_name,
                   'company_email' => $companyData?->company_email,

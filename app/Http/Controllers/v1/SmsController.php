@@ -4,13 +4,61 @@ namespace App\Http\Controllers\v1;
 
 use App\Http\Controllers\Controller;
 use App\Services\v1\FortmedSmsService;
+use App\Services\v1\SmsOrderService;
+use App\Models\v1\SmsOrder;
 use Illuminate\Http\Request;
 
 class SmsController extends Controller
 {
     public function __construct(
-        private readonly FortmedSmsService $smsService
+        private readonly FortmedSmsService $smsService,
+        private readonly SmsOrderService $orderService
     ) {
+    }
+
+    public function orders(Request $request)
+    {
+        $query = SmsOrder::with('items.medicine')->latest('sms_order_id');
+        if (!in_array($request->user()->role, ['owner', 'admin'], true)) {
+            $query->where('branch_id', $request->user()->branch_id);
+        } elseif ($request->filled('branch_id')) {
+            $query->where('branch_id', $request->integer('branch_id'));
+        }
+        return $this->response(true, 'SMS orders loaded successfully.', $query->paginate(min(100, max(1, $request->integer('per_page', 20)))));
+    }
+
+    public function inboundOrder(Request $request)
+    {
+        $data = $request->validate([
+            'branch_id' => ['nullable', 'integer', 'exists:branches,branch_id'],
+            'customer_number' => ['required', 'string', 'max:30'],
+            'message_body' => ['required', 'string', 'max:1000'],
+            'provider_message_id' => ['nullable', 'string', 'max:255'],
+        ]);
+        $branchId = (int) ($data['branch_id'] ?? $request->user()->branch_id);
+        $order = $this->orderService->createFromInbound($branchId, $data['customer_number'], $data['message_body'], $data['provider_message_id'] ?? null);
+        return $this->response(true, 'Pending SMS order created successfully.', $order, 201);
+    }
+
+    public function processOrder(Request $request, SmsOrder $order)
+    {
+        $data = $request->validate([
+            'fulfillment_type' => ['required', 'in:walk-in'],
+            'payment_method' => ['nullable', 'in:Cash,Card,Gcash'],
+            'amount_tendered' => ['nullable', 'numeric', 'min:0'],
+        ]);
+        $transaction = $this->orderService->processWalkIn($order, $request->user(), $data['payment_method'] ?? 'Cash', isset($data['amount_tendered']) ? (float) $data['amount_tendered'] : null);
+        return $this->response(true, 'SMS order processed successfully.', ['order' => $order->fresh('items'), 'transaction' => $transaction]);
+    }
+
+    public function updateOrderStatus(Request $request, SmsOrder $order)
+    {
+        $data = $request->validate(['status' => ['required', 'in:cancelled,invalid']]);
+        if ($order->status !== 'pending') {
+            return $this->response(false, 'Only pending SMS orders can be cancelled or marked invalid.', null, 422);
+        }
+        $order->update(['status' => $data['status']]);
+        return $this->response(true, 'SMS order status updated successfully.', $order->fresh('items'));
     }
 
     private function response(bool $success, string $message, $data = null, int $status = 200)

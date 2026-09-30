@@ -187,7 +187,7 @@ class FilesApi
             ->connectTimeout((int) config('services.files_api.connect_timeout', 5))
             ->withOptions([
                 'allow_redirects' => false,
-                'verify' => true,
+                'verify' => config('services.http_ca_bundle', true),
             ]);
     }
 

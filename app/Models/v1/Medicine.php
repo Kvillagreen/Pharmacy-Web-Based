@@ -16,20 +16,37 @@ class Medicine extends Model
     public $incrementing = true;
     protected $keyType = 'int';
     protected $fillable = [
+        'is_vat_exempt',
         "medicine_name",
         "generic_name",
         "category",
+        "pricing_type",
+        "cost_price",
+        "markup_percent",
         "stocks",
         "unit",
+        "units_per_box",
         "dosage",
         "price",
         "type",
         "reorder_level",
         "is_dangerous",
-        "is_yakap_eligible",
         "needs_protection",
         "status",
+        "archived_at",
         ];
+    protected static function booted(): void
+    {
+        static::saving(function (self $medicine) {
+            $medicine->sku = \App\Services\v1\ProductIdentity::sku($medicine->getAttributes());
+        });
+    }
+    protected $casts = [
+        'archived_at' => 'datetime',
+        'cost_price' => 'decimal:2',
+        'markup_percent' => 'decimal:2',
+        'price' => 'decimal:2',
+    ];
     protected $columnMap = [
     ];
 
@@ -37,6 +54,11 @@ class Medicine extends Model
     public function inventories()
     {
         return $this->hasOne(Inventory::class, 'medicine_id', 'medicine_id');
+    }
+
+    public function batches()
+    {
+        return $this->hasManyThrough(Batch::class, Inventory::class, 'medicine_id', 'batch_id', 'medicine_id', 'batch_id');
     }
 
     public function transactionItems()

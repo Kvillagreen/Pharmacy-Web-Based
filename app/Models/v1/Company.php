@@ -9,6 +9,7 @@ class Company extends Model
 {
     use HasFactory;
     protected $primaryKey = 'company_id';
+    protected $casts = ['tax_profile' => 'array'];
     protected $keyType = 'int';
     protected $fillable = [
         'company_name',

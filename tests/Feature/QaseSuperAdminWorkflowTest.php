@@ -1,0 +1,22 @@
+<?php
+namespace Tests\Feature;
+use App\Models\v1\{Branch,Company,SuperAdmin,SystemAuditLog,User};
+use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Support\Facades\{Cache,Hash};
+use Laravel\Sanctum\Sanctum;
+use Tests\TestCase;
+class QaseSuperAdminWorkflowTest extends TestCase
+{
+ use DatabaseTransactions;
+ protected function setUp(): void { parent::setUp(); Cache::flush(); }
+ private function admin(): SuperAdmin { $a=SuperAdmin::create(['first_name'=>'Root','last_name'=>'Admin','email'=>fake()->unique()->safeEmail(),'password'=>Hash::make('AdminPass1!'),'address'=>'HQ']); Sanctum::actingAs($a,['super_admin']); return $a; }
+ public function test_tc_110_super_admin_logs_in_at_dedicated_endpoint(): void { $a=SuperAdmin::create(['first_name'=>'Login','last_name'=>'Admin','email'=>'login110@test.local','password'=>Hash::make('AdminPass1!')]); $this->postJson('/api/v1/admin/login',['email'=>$a->email,'password'=>'AdminPass1!'])->assertOk()->assertJsonPath('data.role','super_admin')->assertJsonStructure(['token','expires_at']); }
+ public function test_tc_111_regular_user_token_is_rejected_by_admin_portal(): void { $u=User::factory()->create(); Sanctum::actingAs($u,['super_admin']); foreach(['/api/v1/admin/dashboard','/api/v1/admin/companies','/api/v1/admin/profile'] as $url) $this->getJson($url)->assertForbidden(); }
+ public function test_tc_112_super_admin_dashboard_and_analytics_return_system_totals(): void { $this->admin(); Company::factory()->create(); $this->getJson('/api/v1/admin/dashboard')->assertOk()->assertJsonStructure(['data'=>['summary','recent_admins']]); $this->getJson('/api/v1/admin/analytics')->assertOk()->assertJsonStructure(['data'=>['summary','users_by_role','users_by_status','company_user_analytics','recent_logins']]); }
+ public function test_tc_113_super_admin_lists_and_creates_companies(): void { $this->admin(); $p=['company_name'=>'New Pharmacy Co','company_email'=>'company113@test.local','tin_number'=>'TIN-113']; $id=$this->postJson('/api/v1/admin/companies',$p)->assertCreated()->json('data.company_id'); $this->getJson('/api/v1/admin/companies')->assertOk()->assertJsonFragment(['company_id'=>$id,'company_name'=>'New Pharmacy Co']); }
+ public function test_tc_114_super_admin_creates_branch_visible_under_company(): void { $this->admin(); $c=Company::factory()->create(); $p=['company_id'=>$c->company_id,'branch_name'=>'Admin Branch 114','branch_address'=>'Address','branch_contact'=>'0917']; $id=$this->postJson('/api/v1/admin/branches',$p)->assertCreated()->json('data.branch_id'); $this->getJson('/api/v1/admin/companies')->assertOk()->assertJsonFragment(['branch_id'=>$id,'branch_name'=>'Admin Branch 114']); }
+ public function test_tc_115_super_admin_lists_and_approves_pending_admin(): void { $this->admin(); $branch=Branch::factory()->create(); $u=User::factory()->create(['branch_id'=>$branch->branch_id,'role'=>'admin','status'=>'pending']); $this->getJson('/api/v1/admin/approvals/admins')->assertOk()->assertJsonFragment(['user_id'=>$u->user_id]); $this->postJson('/api/v1/admin/approvals/admins/'.$u->user_id.'/approved')->assertOk(); $this->assertSame('approved',$u->fresh()->status); }
+ public function test_tc_116_super_admin_logs_endpoint_returns_app_and_audit_sources(): void { $this->admin(); $this->getJson('/api/v1/admin/logs')->assertOk()->assertJsonStructure(['data'=>['logger','application_logs','application_log_notice','audit_logs']]); }
+ public function test_tc_117_super_admin_profile_can_be_viewed_and_updated(): void { $a=$this->admin(); $this->getJson('/api/v1/admin/profile')->assertOk()->assertJsonPath('data.super_admin_id',$a->super_admin_id); $this->putJson('/api/v1/admin/profile',['first_name'=>'Updated','last_name'=>'Admin','email'=>$a->email,'address'=>'New HQ'])->assertOk(); $this->assertSame('Updated',$a->fresh()->first_name); }
+ public function test_tc_119_super_admin_logout_deletes_current_token(): void { $a=SuperAdmin::create(['first_name'=>'Out','last_name'=>'Admin','email'=>'logout119@test.local','password'=>Hash::make('AdminPass1!')]); $login=$this->postJson('/api/v1/admin/login',['email'=>$a->email,'password'=>'AdminPass1!'])->assertOk(); $token=$login->json('token'); $this->withToken($token)->postJson('/api/v1/admin/logout')->assertOk(); $this->assertSame(0,$a->tokens()->count()); $this->withToken($token)->getJson('/api/v1/admin/profile')->assertUnauthorized(); }
+}

@@ -1,6 +1,9 @@
 <?php
 
 return [
+    // Optional PEM bundle for PHP installations that do not use the OS trust store.
+    'http_ca_bundle' => env('HTTP_CA_BUNDLE', PHP_OS_FAMILY === 'Windows' && is_file(storage_path('app/windows-ca-bundle.pem'))
+        ? storage_path('app/windows-ca-bundle.pem') : true),
 
     /*
     |--------------------------------------------------------------------------
@@ -41,7 +44,8 @@ return [
         'api_token' => env('SMS_API_KEY'),
         'sender_name' => env('SMS_SENDER_NAME', env('FORTMED_SMS_SENDER_NAME', env('APP_NAME', 'Pharmacy Web'))),
         'from_number' => env('SMS_FROM_NUMBER', env('FORTMED_SMS_FROM_NUMBER')),
-        'slot' => env('SMS_SLOT', 0),
+        'slot' => env('SMS_SLOT'), // Omit to use the Android device's configured sending SIM.
+        'device_id' => env('SMS_DEVICE_ID'),
     ],
 
     'files_api' => [

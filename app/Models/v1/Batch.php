@@ -19,12 +19,18 @@ class Batch extends Model
         'received_date',
         'mfg_date',
         'location',
+        'supplier',
         'status',
     ];
 
     public function inventories()
     {
         return $this->hasMany(Inventory::class, 'batch_id', 'batch_id');
+    }
+
+    public function histories()
+    {
+        return $this->hasMany(BatchHistory::class, 'batch_id', 'batch_id')->latest();
     }
 
 }

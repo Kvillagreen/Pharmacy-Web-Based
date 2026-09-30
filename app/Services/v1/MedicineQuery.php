@@ -116,7 +116,8 @@ class MedicineQuery {
           ->orWhere('medicines.generic_name', 'like', "%$search%")
           ->orWhere('medicines.medicine_name', 'like', "%$search%")
           ->orWhere('medicines.medicine_id', 'like', "%$search%")
-          ->orWhere('batches.batch_number', 'like', "%$search%");
+          ->orWhere('batches.batch_number', 'like', "%$search%")
+          ->orWhere('batches.supplier', 'like', "%$search%");
     });
 }
 

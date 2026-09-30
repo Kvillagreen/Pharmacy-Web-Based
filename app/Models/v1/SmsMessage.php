@@ -14,6 +14,7 @@ class SmsMessage extends Model
     protected $keyType = 'int';
 
     protected $fillable = [
+        'scope_verified',
         'reference_number',
         'template_tag',
         'direction',
@@ -37,5 +38,6 @@ class SmsMessage extends Model
         'provider_received_at' => 'datetime',
         'provider_payload' => 'array',
         'is_deleted' => 'boolean',
+        'scope_verified' => 'boolean',
     ];
 }

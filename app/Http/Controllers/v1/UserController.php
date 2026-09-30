@@ -19,10 +19,11 @@ class UserController extends Controller
     private function defaultRolePermissionNames(string $role): array
     {
         return match ($role) {
-            'staff' => ['dashboard', 'sales', 'sms', 'inventory', 'delivery'],
-            'pharmacist' => ['sales', 'sms', 'inventory', 'fefo', 'drugs', 'delivery'],
-            'branch_manager' => ['dashboard', 'inventory', 'fefo', 'delivery', 'reports'],
-            'owner', 'admin', 'super_admin' => ['dashboard', 'sales', 'sms', 'inventory', 'fefo', 'drugs', 'delivery', 'reports', 'users', 'settings', 'branches'],
+            'staff' => ['dashboard', 'sales', 'sms', 'inventory', 'fefo', 'drugs', 'settings'],
+            'pharmacist' => ['sales', 'sms', 'inventory', 'fefo', 'drugs', 'settings'],
+            'branch_manager' => ['dashboard', 'sales', 'sms', 'inventory', 'fefo', 'drugs', 'reports', 'settings'],
+            'owner', 'admin' => ['dashboard', 'sales', 'sms', 'inventory', 'fefo', 'drugs', 'reports', 'users', 'settings', 'branches'],
+            'super_admin' => [],
             default => ['dashboard'],
         };
     }
@@ -106,12 +107,6 @@ class UserController extends Controller
 
         $query = $this->applyUserVisibilityScope($request, $query, $authUser);
 
-        if ($this->canViewUsersAcrossBranches($authUser) && $request->filled('company_id')) {
-            $query->whereHas('branch', function ($q) use ($request) {
-                $q->where('company_id', $request->company_id);
-            });
-        }
-
         // Apply filters
         if ($request->hasAny([
             'search',
@@ -134,12 +129,6 @@ class UserController extends Controller
             ->whereIn('status', ['approved', 'pending', 'rejected']);
 
         $queryOnly = $this->applyUserVisibilityScope($request, $queryOnly, $authUser);
-
-        if ($this->canViewUsersAcrossBranches($authUser) && $request->filled('company_id')) {
-            $queryOnly->whereHas('branch', function ($q) use ($request) {
-                $q->where('company_id', $request->company_id);
-            });
-        }
 
         $totalUsers = (clone $queryOnly)->count();
 
@@ -397,6 +386,10 @@ class UserController extends Controller
                 'success' => false,
                 'message' => 'User or branch not found'
             ], 404);
+        }
+        $authCompanyId = auth()->user()?->branch?->company_id;
+        if (!$authCompanyId || (int) $branch->company_id !== (int) $authCompanyId || (int) $user->branch?->company_id !== (int) $authCompanyId) {
+            return response()->json(['success' => false, 'message' => 'User and branch must belong to your company'], 403);
         }
         if($user->branch_id == $branch_id) {
             return response()->json([

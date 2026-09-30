@@ -14,6 +14,7 @@ class Inventory extends Model
     protected $keyType = 'int';
 
     protected $fillable = [
+        'cost_includes_vat',
         'branch_id',
         'medicine_id',
         'batch_id',
@@ -22,9 +23,14 @@ class Inventory extends Model
         'container_name',
         'container_count',
         'pcs_per_container',
+        'cost_price',
     ];
 
-     public function medicine()
+    protected $casts = [
+        'cost_price' => 'decimal:2',
+    ];
+
+    public function medicine()
     {
         return $this->belongsTo(Medicine::class, 'medicine_id', 'medicine_id');
     }

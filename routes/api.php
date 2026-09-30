@@ -17,7 +17,6 @@ use App\Http\Controllers\v1\PermissionController;
 use App\Http\Controllers\v1\PasswordResetController;
 use App\Http\Controllers\v1\AuthController;
 use App\Http\Controllers\v1\CompanyController;
-use App\Http\Controllers\v1\InventoryTransferController;
 use App\Http\Controllers\v1\SuperAdminAuthController;
 
 Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], function() {
@@ -29,20 +28,28 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
     Route::post('/branch-public', [BranchController::class,'branch']);
     Route::get('/catalog', [MedicineController::class, 'publicCatalog']);
     Route::post('/admin/login', [SuperAdminAuthController::class, 'login']);
+    Route::post('/sms/receiver', [SmsController::class, 'receiver']);
 
     // Protected routes
-    Route::middleware('auth:sanctum')->group(function () {
+    Route::middleware(['auth:sanctum', \App\Http\Middleware\EnsurePharmacyAccess::class])->group(function () {
         Route::get('/header/notifications', [AuthController::class, 'headerNotifications']);
         Route::put('/header/notifications/{id}/read', [AuthController::class, 'markNotificationRead']);
         Route::get('/dashboard', [DashboardController::class, 'index']);
         Route::get('/controlled-drugs', [ControlledDrugController::class, 'index']);
         Route::get('/reports', [ReportController::class, 'index']);
         Route::get('/reports/bir-annual', [ReportController::class, 'birAnnualDeclaration']);
+        Route::get('/reports/bir-profile', [ReportController::class, 'birProfile']);
+        Route::post('/reports/bir-2306', [ReportController::class, 'storeBir2306']);
         Route::get('/reports/transactions', [TransactionController::class, 'records']);
         Route::get('/sms/replies', [SmsController::class, 'replies']);
+        Route::get('/sms/orders', [SmsController::class, 'orders']);
+        Route::post('/sms/orders', [SmsController::class, 'saveOrder']);
+        Route::get('/sms/orders/{orderId}', [SmsController::class, 'showOrder']);
+        Route::put('/sms/orders/{orderId}/process', [SmsController::class, 'processOrder']);
         Route::get('/sms/diagnostics', [SmsController::class, 'diagnostics']);
         Route::get('/sms/logs', [SmsController::class, 'logs']);
         Route::get('/user/permissions/options', [UserController::class, 'permissionOptions']);
+        Route::get('/user/archived/list', [UserController::class, 'archived']);
         Route::get('/user/{id}/permissions', [UserController::class, 'userPermissions']);
         Route::get('/branch', [BranchController::class, 'index']);
         Route::get('/branch/{branch}', [BranchController::class, 'show']);
@@ -57,9 +64,9 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
         Route::get('/fefo/{fefo}', [FefoController::class, 'show']);
         Route::get('/transaction', [TransactionController::class, 'index']);
         Route::get('/transaction/{transaction}/attachments', [TransactionAttachmentController::class, 'index']);
+        Route::get('/transaction/{transaction}/approvers', [TransactionController::class, 'approvers']);
         Route::get('/transaction/{transaction}/attachments/{attachment}/download', [TransactionAttachmentController::class, 'download']);
         Route::get('/transaction/{transaction}', [TransactionController::class, 'show']);
-        Route::get('/inventory-transfer', [InventoryTransferController::class, 'index']);
         Route::get('/company', [CompanyController::class, 'index']);
         Route::get('/company/{company}', [CompanyController::class, 'show']);
         Route::get('/user', [UserController::class, 'index']);
@@ -67,36 +74,38 @@ Route::group(['prefix'=> 'v1',  'namespace' => 'App\Http\Controllers\v1'], funct
 
     });
 
-    Route::middleware(['auth:sanctum', 'prevent.concurrent'])->group(function () {
+    Route::middleware(['auth:sanctum', \App\Http\Middleware\EnsurePharmacyAccess::class, 'prevent.concurrent'])->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
         Route::post('/auth-user', [AuthController::class,'AuthUser']);
         Route::get('/settings', [AuthController::class, 'settings']);
+        Route::get('/settings/diagnostics', function (Request $request) {
+            abort_unless(in_array($request->user()->role,['owner','admin'],true),403);
+            return response()->json(['success'=>true,'data'=>['environment'=>app()->environment(),'database'=>\Illuminate\Support\Facades\DB::connection()->getDatabaseName()]]);
+        });
         Route::put('/settings/notifications', [AuthController::class, 'updateNotificationPreferences']);
         Route::post('/settings/revoke-other-sessions', [AuthController::class, 'revokeOtherSessions']);
         Route::apiResource('/branch', BranchController::class)->except(['index', 'show']);
         Route::apiResource('/permissions', PermissionController::class)->except(['index', 'show']);
         Route::post('/change-password', [AuthController::class, 'changePassword']);
+        Route::post('/sms/sync', [SmsController::class, 'sync']);
         Route::post('/sms/messages', [SmsController::class, 'send']);
         Route::delete('/sms/messages/{messageId}', [SmsController::class, 'destroyMessage']);
         Route::delete('/sms/conversations/{counterpartyNumber}', [SmsController::class, 'destroyConversation']);
         Route::apiResource('/medicine', MedicineController::class)->except(['index', 'show']);
-        Route::apiResource('/fefo', FefoController::class)->except(['index', 'show']);
-        Route::apiResource('/transaction', TransactionController::class)->except(['index', 'show']);
+        Route::apiResource('/transaction', TransactionController::class)->only(['store', 'destroy']);
         Route::post('/transaction/{transaction}/void', [TransactionController::class, 'void']);
         Route::post('/transaction/{transaction}/attachments/{attachment}', [TransactionAttachmentController::class, 'replace']);
         Route::patch('/transaction/{transaction}/attachments/{attachment}', [TransactionAttachmentController::class, 'update']);
         Route::delete('/transaction/{transaction}/attachments/{attachment}', [TransactionAttachmentController::class, 'destroy']);
-        Route::post('/inventory-transfer', [InventoryTransferController::class, 'store']);
-        Route::post('/inventory-transfer/{id}/accept', [InventoryTransferController::class, 'accept']);
-        Route::post('/inventory-transfer/{id}/decline', [InventoryTransferController::class, 'decline']);
         Route::post('/fefo/{batch}/pull-out', [FefoController::class, 'pullOut']);
         Route::post('/fefo/{batch}/update-location', [FefoController::class, 'updateLocation']);
         Route::post('/controlled-drugs/{batch}/dispose', [ControlledDrugController::class, 'dispose']);
         Route::post('/controlled-drugs/{batch}/update-location', [ControlledDrugController::class, 'updateLocation']);
-        Route::apiResource('/company', CompanyController::class)->except(['index', 'show']);
+        Route::apiResource('/company', CompanyController::class)->only(['update']);
         Route::post('/user/update-status/{id}/{status}', [UserController::class, 'updateUserStatus']);
         Route::post('/user/update-branch/{id}/{branch_id}', [UserController::class, 'updateUserBranch']);
         Route::put('/user/{id}/permissions', [UserController::class, 'updateUserPermissions']);
+        Route::post('/user/{id}/restore', [UserController::class, 'restore'])->name('users.restore');
         Route::apiResource('/user', UserController::class)->except(['index', 'show']);
     });
 

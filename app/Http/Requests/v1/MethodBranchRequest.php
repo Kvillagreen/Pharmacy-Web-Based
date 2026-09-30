@@ -26,7 +26,7 @@ class MethodBranchRequest extends FormRequest
                     ->ignore($branchId, 'branch_id'),
             ],
             'branch_address' => ['required', 'string', 'max:500'],
-            'branch_contact' => ['required', 'string', 'max:50'],
+            'branch_contact' => ['required', 'string', 'regex:/^[0-9]{11}$/'],
             'theme_key' => ['nullable', 'string', Rule::in(['emerald', 'ocean', 'sunset', 'royal', 'rose', 'amber', 'teal', 'slate', 'orchid', 'cocoa'])],
             'status' => ['nullable', 'string', Rule::in(['active', 'deleted', 'inactive'])],
         ];
